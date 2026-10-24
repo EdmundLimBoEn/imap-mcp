@@ -16,7 +16,6 @@ jobs:
         env:
           GREENMAIL_OPTS: "-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.auth.disabled -Dgreenmail.verbose"
         ports:
-          - 3025:3025
           - 3143:3143
     steps:
       - uses: actions/checkout@v4

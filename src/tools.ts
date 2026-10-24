@@ -109,50 +109,5 @@ export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
     );
   }
 
-  const draftShape = {
-    account: acctSchema,
-    to: z.array(z.string().email()).min(1),
-    cc: z.array(z.string().email()).optional(),
-    subject: z.string(),
-    text: z.string(),
-    in_reply_to: z.string().optional().describe("Message-ID being replied to"),
-  };
-
-  server.registerTool(
-    "create_draft",
-    {
-      description: "Save a plain-text draft to the account's Drafts folder via IMAP APPEND. Never sends.",
-      inputSchema: draftShape,
-    },
-    wrap(async (a: any) => {
-      const acct = get(a.account);
-      const r = await backend.appendDraft(acct, acct.user, {
-        to: a.to, cc: a.cc, subject: a.subject, text: a.text, inReplyTo: a.in_reply_to,
-      });
-      return { saved: true, sent: false, ...r };
-    }),
-  );
-
-  // Real sending only exists when explicitly enabled.
-  if (cfg.enableSmtpSend) {
-    server.registerTool(
-      "send_message",
-      { description: "Send an email over SMTP (enabled by ENABLE_SMTP_SEND=true).", inputSchema: draftShape },
-      wrap(async (a: any) => {
-        const acct = get(a.account);
-        if (!acct.smtp) throw new Error(`SMTP not configured for ${acct.name}`);
-        const { createTransport } = await import("nodemailer");
-        const t = createTransport({
-          host: acct.smtp.host, port: acct.smtp.port, secure: acct.smtp.tls,
-          auth: { user: acct.smtp.user, pass: acct.smtp.pass },
-        });
-        const info = await t.sendMail({
-          from: acct.user, to: a.to, cc: a.cc, subject: a.subject, text: a.text,
-          inReplyTo: a.in_reply_to, references: a.in_reply_to,
-        });
-        return { sent: true, messageId: info.messageId };
-      }),
-    );
-  }
   return server;
 }

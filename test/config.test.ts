@@ -10,9 +10,11 @@ describe("loadConfig", () => {
   it("parses multiple accounts with defaults", () => {
     const c = cfg();
     expect([...c.accounts.keys()]).toEqual(["work", "personal"]);
-    expect(c.accounts.get("work")).toMatchObject({ port: 993, tls: true, draftsFolder: "Drafts" });
+    expect(c.accounts.get("work")).toMatchObject({ port: 993, tls: true });
     expect(c.accounts.get("personal")).toMatchObject({ port: 143, tls: false });
-    expect(c.enableSmtpSend).toBe(false);
+  });
+  it("ignores ENABLE_SMTP_SEND entirely", () => {
+    expect(Object.keys(cfg({ ENABLE_SMTP_SEND: "true" }))).not.toContain("enableSmtpSend");
   });
   it("requires per-account vars", () => {
     const env: Record<string, string> = { ...baseEnv };

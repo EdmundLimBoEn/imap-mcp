@@ -1,8 +1,8 @@
 # imap-mcp
 
-A small [MCP](https://modelcontextprotocol.io) server that bridges one or more IMAP mailboxes over **Streamable HTTP**, so AI agents can read, search and triage mail and save drafts.
+A small [MCP](https://modelcontextprotocol.io) server that bridges one or more IMAP mailboxes over **Streamable HTTP**, so AI agents can read, search and triage mail.
 
-**Safe by default:** no tool can send mail. `create_draft` only does an IMAP `APPEND` to the Drafts folder. A `send_message` tool exists only when `ENABLE_SMTP_SEND=true`.
+**Read-only:** there is no SMTP code or dependency, and no tool can send, draft, move or delete mail. The only write is `mark_read` / `mark_unread` (the `\Seen` flag).
 
 ## Tools
 
@@ -14,8 +14,6 @@ A small [MCP](https://modelcontextprotocol.io) server that bridges one or more I
 | `search` | `from`, `subject`, `text`, `since`, `before` (YYYY-MM-DD) |
 | `read_message` | Headers, plain-text body (capped at `MAX_BODY_CHARS`), attachment names. Does not mark the message read |
 | `mark_read` / `mark_unread` | Set or clear `\Seen` on UIDs |
-| `create_draft` | Save a plain-text draft to Drafts via IMAP APPEND. Never sends |
-| `send_message` | **Only when `ENABLE_SMTP_SEND=true`**: sends over SMTP |
 
 ## Configuration (env vars only)
 
@@ -28,12 +26,9 @@ A small [MCP](https://modelcontextprotocol.io) server that bridges one or more I
 | `IMAP_<NAME>_PASS` | yes | | Use an app password |
 | `IMAP_<NAME>_PORT` | no | 993 (TLS) / 143 | |
 | `IMAP_<NAME>_TLS` | no | `true` | Implicit TLS |
-| `IMAP_<NAME>_DRAFTS` | no | `Drafts` | Used if the server has no `\Drafts` special-use folder |
 | `PORT` | no | `8787` | |
 | `HOST` | no | `0.0.0.0` | Listen address inside the container |
 | `MAX_BODY_CHARS` | no | `20000` | Body cap for `read_message` |
-| `ENABLE_SMTP_SEND` | no | `false` | Registers `send_message` when `true` |
-| `SMTP_<NAME>_HOST` / `_PORT` / `_TLS` / `_USER` / `_PASS` | no | 465, TLS, IMAP creds | Only read when sending is enabled |
 | `BIND_IP` | compose only | | Host IP to publish on (e.g. your Tailscale IP) |
 | `IMAP_TLS_INSECURE` | no | `false` | Skip TLS cert verification (testing only) |
 
@@ -85,7 +80,7 @@ Example client config:
 ```bash
 npm ci
 npm test                       # unit tests (mocked IMAP layer)
-docker run -d -p 3025:3025 -p 3143:3143 \
+docker run -d -p 3143:3143 \
   -e GREENMAIL_OPTS="-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.auth.disabled" \
   greenmail/standalone:2.1.2
 GREENMAIL_HOST=localhost npm test   # adds the end-to-end smoke test

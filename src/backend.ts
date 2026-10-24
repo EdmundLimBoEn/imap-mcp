@@ -1,6 +1,5 @@
 import { ImapFlow, type SearchObject } from "imapflow";
 import { simpleParser } from "mailparser";
-import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import type { AccountConfig } from "./config.js";
 
 export interface MessageSummary {
@@ -26,35 +25,13 @@ export interface SearchQuery {
   before?: string;
   unreadOnly?: boolean;
 }
-export interface DraftInput {
-  to: string[];
-  cc?: string[];
-  subject: string;
-  text: string;
-  inReplyTo?: string;
-}
 
-/** Abstract mail layer, mocked in unit tests. */
+/** Read-only mail layer (plus \\Seen flag changes), mocked in unit tests. */
 export interface MailBackend {
   listFolders(acct: AccountConfig): Promise<{ path: string; specialUse?: string }[]>;
   search(acct: AccountConfig, folder: string, q: SearchQuery, limit: number): Promise<MessageSummary[]>;
   read(acct: AccountConfig, folder: string, uid: number, maxChars: number): Promise<FullMessage | null>;
   setSeen(acct: AccountConfig, folder: string, uids: number[], seen: boolean): Promise<void>;
-  appendDraft(acct: AccountConfig, from: string, d: DraftInput): Promise<{ folder: string; uid?: number }>;
-}
-
-export function buildRaw(from: string, d: DraftInput): Promise<Buffer> {
-  return new MailComposer({
-    from,
-    to: d.to,
-    cc: d.cc,
-    subject: d.subject,
-    text: d.text,
-    inReplyTo: d.inReplyTo,
-    references: d.inReplyTo,
-  })
-    .compile()
-    .build();
 }
 
 export function toSearchObject(q: SearchQuery): SearchObject {
@@ -163,14 +140,4 @@ export class ImapBackend implements MailBackend {
     });
   }
 
-  appendDraft(acct: AccountConfig, from: string, d: DraftInput) {
-    return this.withClient(acct, async (c) => {
-      const raw = await buildRaw(from, d);
-      const list = await c.list();
-      const folder = list.find((m) => m.specialUse === "\\Drafts")?.path ?? acct.draftsFolder;
-      if (!list.some((m) => m.path === folder)) await c.mailboxCreate(folder);
-      const res = await c.append(folder, raw, ["\\Draft", "\\Seen"]);
-      return { folder, uid: res ? res.uid : undefined };
-    });
-  }
 }

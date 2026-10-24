@@ -1,7 +1,7 @@
-// End-to-end against GreenMail (docker run -p 3143:3143 -p 3025:3025 greenmail/standalone).
+// End-to-end against GreenMail (docker run -p 3143:3143 greenmail/standalone).
 // Skipped unless GREENMAIL_HOST is set.
 import { describe, it, expect } from "vitest";
-import { createTransport } from "nodemailer";
+import { ImapFlow } from "imapflow";
 import { ImapBackend } from "../src/backend.js";
 import { loadConfig } from "../src/config.js";
 
@@ -19,11 +19,17 @@ describe.skipIf(!host)("smoke: GreenMail", () => {
   const acct = cfg.accounts.get("test")!;
   const b = new ImapBackend();
 
-  it("lists, searches, reads, flags and drafts", async () => {
-    await createTransport({ host, port: 3025, secure: false, ignoreTLS: true }).sendMail({
-      from: "sender@localhost", to: "smoke@localhost", subject: "Smoke hello", text: "body text here",
-      attachments: [{ filename: "note.txt", content: "hi" }],
-    });
+  it("lists, searches, reads and flags", async () => {
+    // Seed INBOX via IMAP APPEND (test-only; the server itself never appends or sends).
+    const seedClient = new ImapFlow({ host: host!, port: 3143, secure: false, auth: { user: "smoke@localhost", pass: "smoke" }, logger: false });
+    await seedClient.connect();
+    const raw = [
+      "From: sender@localhost", "To: smoke@localhost", "Subject: Smoke hello", "MIME-Version: 1.0",
+      'Content-Type: multipart/mixed; boundary="b1"', "", "--b1", "Content-Type: text/plain", "", "body text here",
+      "--b1", 'Content-Type: text/plain; name="note.txt"', 'Content-Disposition: attachment; filename="note.txt"', "", "hi", "--b1--", "",
+    ].join("\r\n");
+    await seedClient.append("INBOX", raw, []);
+    await seedClient.logout();
     let list = [] as Awaited<ReturnType<typeof b.search>>;
     for (let i = 0; i < 20 && list.length === 0; i++) {
       list = await b.search(acct, "INBOX", { unreadOnly: true }, 10).catch(() => []);
@@ -39,9 +45,6 @@ describe.skipIf(!host)("smoke: GreenMail", () => {
     expect(m!.seen).toBe(false);
     await b.setSeen(acct, "INBOX", [uid], true);
     expect(await b.search(acct, "INBOX", { unreadOnly: true }, 10)).toEqual([]);
-    const d = await b.appendDraft(acct, acct.user, { to: ["x@localhost"], subject: "Draft!", text: "t" });
-    expect(d.folder).toBe("Drafts");
-    expect((await b.search(acct, "Drafts", {}, 10))[0].subject).toBe("Draft!");
-    expect((await b.listFolders(acct)).map((f) => f.path)).toContain("Drafts");
+    expect((await b.listFolders(acct)).map((f) => f.path)).toContain("INBOX");
   });
 });

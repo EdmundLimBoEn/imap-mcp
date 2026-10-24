@@ -5,8 +5,6 @@ export interface AccountConfig {
   user: string;
   pass: string;
   tls: boolean;
-  draftsFolder: string;
-  smtp?: { host: string; port: number; tls: boolean; user: string; pass: string };
 }
 
 export interface AppConfig {
@@ -14,7 +12,6 @@ export interface AppConfig {
   port: number;
   host: string;
   maxBodyChars: number;
-  enableSmtpSend: boolean;
   accounts: Map<string, AccountConfig>;
 }
 
@@ -28,7 +25,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   const names = (env.IMAP_ACCOUNTS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
   if (names.length === 0) throw new Error("IMAP_ACCOUNTS must list at least one account name");
-  const enableSmtpSend = bool(env.ENABLE_SMTP_SEND, false);
   const accounts = new Map<string, AccountConfig>();
   for (const raw of names) {
     const name = raw.toLowerCase();
@@ -47,22 +43,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       user: need("USER"),
       pass: need("PASS"),
       tls,
-      draftsFolder: env[p + "DRAFTS"] || "Drafts",
     };
-    if (enableSmtpSend) {
-      const s = `SMTP_${name.toUpperCase()}_`;
-      const host = env[s + "HOST"];
-      if (host) {
-        const stls = bool(env[s + "TLS"], true);
-        acct.smtp = {
-          host,
-          port: Number(env[s + "PORT"] || (stls ? 465 : 587)),
-          tls: stls,
-          user: env[s + "USER"] || acct.user,
-          pass: env[s + "PASS"] || acct.pass,
-        };
-      }
-    }
     accounts.set(name, acct);
   }
   return {
@@ -70,7 +51,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     port: Number(env.PORT || 8787),
     host: env.HOST || "0.0.0.0",
     maxBodyChars: Number(env.MAX_BODY_CHARS || 20000),
-    enableSmtpSend,
     accounts,
   };
 }

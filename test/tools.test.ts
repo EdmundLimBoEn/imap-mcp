@@ -13,7 +13,6 @@ const mock = (): MailBackend => ({
     attachments: [{ filename: "a.pdf", contentType: "application/pdf", size: 10 }],
   })),
   setSeen: vi.fn(async () => {}),
-  appendDraft: vi.fn(async () => ({ folder: "Drafts", uid: 3 })),
 });
 
 async function connect(c = cfg(), b = mock()) {
@@ -30,13 +29,9 @@ describe("tools", () => {
   let ctx: Awaited<ReturnType<typeof connect>>;
   beforeEach(async () => { ctx = await connect(cfg({ MAX_BODY_CHARS: "50" })); });
 
-  it("exposes the read-only toolset by default (no send)", async () => {
+  it("exposes only read tools plus flag changes (no draft/send)", async () => {
     const names = (await ctx.client.listTools()).tools.map((t) => t.name).sort();
-    expect(names).toEqual(["create_draft", "list_accounts", "list_folders", "list_messages", "mark_read", "mark_unread", "read_message", "search"]);
-  });
-  it("adds send_message only when ENABLE_SMTP_SEND=true", async () => {
-    const { client } = await connect(cfg({ ENABLE_SMTP_SEND: "true" }));
-    expect((await client.listTools()).tools.map((t) => t.name)).toContain("send_message");
+    expect(names).toEqual(["list_accounts", "list_folders", "list_messages", "mark_read", "mark_unread", "read_message", "search"]);
   });
   it("list_accounts never leaks hosts or passwords", async () => {
     const r = await ctx.client.callTool({ name: "list_accounts", arguments: {} });
@@ -63,11 +58,6 @@ describe("tools", () => {
     await ctx.client.callTool({ name: "mark_unread", arguments: { account: "work", uids: [3] } });
     expect(ctx.b.setSeen).toHaveBeenNthCalledWith(1, expect.anything(), "INBOX", [1, 2], true);
     expect(ctx.b.setSeen).toHaveBeenNthCalledWith(2, expect.anything(), "INBOX", [3], false);
-  });
-  it("create_draft appends, never sends", async () => {
-    const r = parse(await ctx.client.callTool({ name: "create_draft", arguments: { account: "work", to: ["x@example.com"], subject: "s", text: "t" } }));
-    expect(r).toMatchObject({ saved: true, sent: false, folder: "Drafts" });
-    expect(ctx.b.appendDraft).toHaveBeenCalledOnce();
   });
   it("unknown account is an error", async () => {
     const r: any = await ctx.client.callTool({ name: "list_folders", arguments: { account: "nope" } });
