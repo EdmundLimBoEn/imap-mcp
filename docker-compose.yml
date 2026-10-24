@@ -1,0 +1,12 @@
+services:
+  imap-mcp:
+    image: ghcr.io/edmundlimboen/imap-mcp:latest
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      # Bind only to your Tailscale IP (set BIND_IP in .env); never 0.0.0.0 on a public host.
+      - "${BIND_IP:?set BIND_IP}:8787:8787"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
