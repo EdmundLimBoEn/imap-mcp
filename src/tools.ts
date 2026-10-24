@@ -1,14 +1,17 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { AppConfig } from "./config.js";
-import type { MailBackend } from "./backend.js";
+import { buildRaw, type MailBackend } from "./backend.js";
 
 const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] });
 const fail = (msg: string) => ({ content: [{ type: "text" as const, text: msg }], isError: true });
+const noCrlf = (s: string) => !/[\r\n]/.test(s);
+const header = z.string().refine(noCrlf, "CR/LF not allowed in headers");
+const address = z.string().email().refine(noCrlf, "CR/LF not allowed in addresses");
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}/, "YYYY-MM-DD");
 
 export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
-  const server = new McpServer({ name: "imap-mcp", version: "0.1.0" });
+  const server = new McpServer({ name: "imap-mcp", version: "0.2.0" });
   const acctSchema = z.string().describe("Account name from list_accounts");
   const get = (name: string) => {
     const a = cfg.accounts.get(name.toLowerCase());
@@ -109,5 +112,35 @@ export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
     );
   }
 
+  // Sending only exists when SMTP_ENABLED=true.
+  if (cfg.smtpEnabled) {
+    server.registerTool(
+      "send_message",
+      {
+        description: "Send a plain-text email over SMTP and save a copy to the Sent folder.",
+        inputSchema: {
+          account: acctSchema,
+          to: z.array(address).min(1).max(50),
+          cc: z.array(address).max(50).optional(),
+          subject: header,
+          body: z.string(),
+          in_reply_to: header.optional().describe("Message-ID being replied to; sets In-Reply-To and References"),
+        },
+      },
+      wrap(async (a: { account: string; to: string[]; cc?: string[]; subject: string; body: string; in_reply_to?: string }) => {
+        const acct = get(a.account);
+        if (!acct.smtp) throw new Error(`SMTP not configured for ${acct.name} (set IMAP_${acct.name.toUpperCase()}_SMTP_HOST)`);
+        const raw = await buildRaw({ from: acct.user, to: a.to, cc: a.cc, subject: a.subject, body: a.body, inReplyTo: a.in_reply_to });
+        const sent = await backend.smtpSend(acct, { from: acct.user, to: [...a.to, ...(a.cc ?? [])] }, raw);
+        let sentCopy: { saved: boolean; folder?: string; error?: string };
+        try {
+          sentCopy = { saved: true, ...(await backend.appendSent(acct, raw)) };
+        } catch (e) {
+          sentCopy = { saved: false, error: (e as Error).message };
+        }
+        return { sent: true, messageId: sent.messageId, sentCopy };
+      }),
+    );
+  }
   return server;
 }

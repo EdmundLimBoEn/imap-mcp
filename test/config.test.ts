@@ -13,8 +13,12 @@ describe("loadConfig", () => {
     expect(c.accounts.get("work")).toMatchObject({ port: 993, tls: true });
     expect(c.accounts.get("personal")).toMatchObject({ port: 143, tls: false });
   });
-  it("ignores ENABLE_SMTP_SEND entirely", () => {
-    expect(Object.keys(cfg({ ENABLE_SMTP_SEND: "true" }))).not.toContain("enableSmtpSend");
+  it("SMTP is gated off by default and parsed per account", () => {
+    const c = cfg();
+    expect(c.smtpEnabled).toBe(false);
+    expect(c.accounts.get("work")!.smtp).toEqual({ host: "smtp.example.com", port: 465, tls: true });
+    expect(c.accounts.get("personal")!.smtp).toBeUndefined();
+    expect(cfg({ SMTP_ENABLED: "true", IMAP_WORK_SENT: "Sent Items" }).accounts.get("work")!.sentFolder).toBe("Sent Items");
   });
   it("requires per-account vars", () => {
     const env: Record<string, string> = { ...baseEnv };

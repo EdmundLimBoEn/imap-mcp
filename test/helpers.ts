@@ -6,6 +6,7 @@ export const baseEnv = {
   IMAP_WORK_HOST: "imap.example.com",
   IMAP_WORK_USER: "work@example.com",
   IMAP_WORK_PASS: "placeholder",
+  IMAP_WORK_SMTP_HOST: "smtp.example.com",
   IMAP_PERSONAL_HOST: "imap.example.org",
   IMAP_PERSONAL_PORT: "143",
   IMAP_PERSONAL_TLS: "false",

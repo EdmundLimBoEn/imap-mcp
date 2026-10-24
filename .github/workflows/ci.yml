@@ -2,6 +2,7 @@ name: ci
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
 
 permissions:
@@ -16,6 +17,7 @@ jobs:
         env:
           GREENMAIL_OPTS: "-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.auth.disabled -Dgreenmail.verbose"
         ports:
+          - 3025:3025
           - 3143:3143
     steps:
       - uses: actions/checkout@v4
@@ -33,7 +35,7 @@ jobs:
 
   image:
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -46,10 +48,17 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute tags
+        id: tags
+        run: |
+          img=ghcr.io/edmundlimboen/imap-mcp
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "list=$img:${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            printf 'list<<EOF\n%s:latest\n%s:%s\nEOF\n' "$img" "$img" "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          fi
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: |
-            ghcr.io/edmundlimboen/imap-mcp:latest
-            ghcr.io/edmundlimboen/imap-mcp:${{ github.sha }}
+          tags: ${{ steps.tags.outputs.list }}
