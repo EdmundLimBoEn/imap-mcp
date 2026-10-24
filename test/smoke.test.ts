@@ -63,7 +63,7 @@ describe.skipIf(!host)("smoke: GreenMail", () => {
     await client.connect(ct);
     const r: any = await client.callTool({ name: "send_message", arguments: {
       account: "test", to: ["smoke@localhost"], subject: "Smoke sent", body: "via smtp", in_reply_to: "<orig@localhost>" } });
-    expect(r.isError).toBeFalsy();
+    expect(r.isError, r.content?.[0]?.text).toBeFalsy();
     const out = JSON.parse(r.content[0].text);
     expect(out).toMatchObject({ sent: true, sentCopy: { saved: true, folder: "Sent" } });
     let got = [] as Awaited<ReturnType<typeof b.search>>;
