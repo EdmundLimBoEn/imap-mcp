@@ -1,5 +1,7 @@
 import { ImapFlow, type SearchObject } from "imapflow";
 import { simpleParser } from "mailparser";
+import { createTransport } from "nodemailer";
+import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import type { AccountConfig } from "./config.js";
 
 export interface MessageSummary {
@@ -17,6 +19,28 @@ export interface FullMessage extends MessageSummary {
   truncated: boolean;
   attachments: { filename: string; contentType: string; size: number }[];
 }
+export interface OutgoingMessage {
+  from: string;
+  to: string[];
+  cc?: string[];
+  subject: string;
+  body: string;
+  inReplyTo?: string;
+}
+
+export function buildRaw(m: OutgoingMessage): Promise<Buffer> {
+  return new MailComposer({
+    from: m.from,
+    to: m.to,
+    cc: m.cc,
+    subject: m.subject,
+    text: m.body,
+    ...(m.inReplyTo ? { inReplyTo: m.inReplyTo, references: m.inReplyTo } : {}),
+  })
+    .compile()
+    .build();
+}
+
 export interface SearchQuery {
   from?: string;
   subject?: string;
@@ -32,6 +56,10 @@ export interface MailBackend {
   search(acct: AccountConfig, folder: string, q: SearchQuery, limit: number): Promise<MessageSummary[]>;
   read(acct: AccountConfig, folder: string, uid: number, maxChars: number): Promise<FullMessage | null>;
   setSeen(acct: AccountConfig, folder: string, uids: number[], seen: boolean): Promise<void>;
+  /** SMTP submit of a pre-built RFC 822 message. */
+  smtpSend(acct: AccountConfig, envelope: { from: string; to: string[] }, raw: Buffer): Promise<{ messageId?: string }>;
+  /** IMAP APPEND a copy to the Sent folder. */
+  appendSent(acct: AccountConfig, raw: Buffer): Promise<{ folder: string }>;
 }
 
 export function toSearchObject(q: SearchQuery): SearchObject {
@@ -140,4 +168,31 @@ export class ImapBackend implements MailBackend {
     });
   }
 
+
+  async smtpSend(acct: AccountConfig, envelope: { from: string; to: string[] }, raw: Buffer) {
+    if (!acct.smtp) throw new Error(`SMTP not configured for ${acct.name}`);
+    const t = createTransport({
+      host: acct.smtp.host,
+      port: acct.smtp.port,
+      secure: acct.smtp.tls,
+      auth: { user: acct.user, pass: acct.pass },
+      tls: { rejectUnauthorized: process.env.IMAP_TLS_INSECURE !== "true" },
+    });
+    try {
+      const info = await t.sendMail({ envelope, raw });
+      return { messageId: info.messageId };
+    } finally {
+      t.close();
+    }
+  }
+
+  appendSent(acct: AccountConfig, raw: Buffer) {
+    return this.withClient(acct, async (c) => {
+      const list = await c.list();
+      const folder = acct.sentFolder ?? list.find((m) => m.specialUse === "\\Sent")?.path ?? "Sent";
+      if (!list.some((m) => m.path === folder)) await c.mailboxCreate(folder);
+      await c.append(folder, raw, ["\\Seen"]);
+      return { folder };
+    });
+  }
 }

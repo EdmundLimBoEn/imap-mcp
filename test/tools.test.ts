@@ -13,6 +13,8 @@ const mock = (): MailBackend => ({
     attachments: [{ filename: "a.pdf", contentType: "application/pdf", size: 10 }],
   })),
   setSeen: vi.fn(async () => {}),
+  smtpSend: vi.fn(async () => ({ messageId: "<m1@example.com>" })),
+  appendSent: vi.fn(async () => ({ folder: "Sent" })),
 });
 
 async function connect(c = cfg(), b = mock()) {
@@ -29,9 +31,46 @@ describe("tools", () => {
   let ctx: Awaited<ReturnType<typeof connect>>;
   beforeEach(async () => { ctx = await connect(cfg({ MAX_BODY_CHARS: "50" })); });
 
-  it("exposes only read tools plus flag changes (no draft/send)", async () => {
+  it("gate off: no send_message tool", async () => {
     const names = (await ctx.client.listTools()).tools.map((t) => t.name).sort();
     expect(names).toEqual(["list_accounts", "list_folders", "list_messages", "mark_read", "mark_unread", "read_message", "search"]);
+  });
+  it("gate on: send_message registered", async () => {
+    const { client } = await connect(cfg({ SMTP_ENABLED: "true" }));
+    expect((await client.listTools()).tools.map((t) => t.name)).toContain("send_message");
+  });
+  it("send_message sends then appends the same raw message to Sent, with threading headers", async () => {
+    const { client, b } = await connect(cfg({ SMTP_ENABLED: "true" }));
+    const r = parse(await client.callTool({ name: "send_message", arguments: {
+      account: "work", to: ["a@example.com"], cc: ["c@example.com"], subject: "Re: hi", body: "yo", in_reply_to: "<orig@example.com>" } }));
+    expect(r).toMatchObject({ sent: true, messageId: "<m1@example.com>", sentCopy: { saved: true, folder: "Sent" } });
+    const [, env, raw] = (b.smtpSend as any).mock.calls[0];
+    expect(env).toEqual({ from: "work@example.com", to: ["a@example.com", "c@example.com"] });
+    const text = raw.toString();
+    expect(text).toMatch(/^In-Reply-To: <orig@example.com>$/m);
+    expect(text).toMatch(/^References: <orig@example.com>$/m);
+    expect((b.appendSent as any).mock.calls[0][1]).toBe(raw);
+  });
+  it("send_message rejects header injection and bad addresses", async () => {
+    const { client, b } = await connect(cfg({ SMTP_ENABLED: "true" }));
+    const base = { account: "work", to: ["a@example.com"], subject: "s", body: "b" };
+    for (const bad of [
+      { subject: "hi\r\nBcc: evil@example.com" },
+      { in_reply_to: "<x>\nBcc: evil@example.com" },
+      { to: ["a@example.com\r\nBcc: evil@example.com"] },
+      { to: ["not-an-address"] },
+      { cc: ["evil@example.com\n"] },
+    ]) {
+      const r: any = await client.callTool({ name: "send_message", arguments: { ...base, ...bad } });
+      expect(r.isError).toBe(true);
+    }
+    expect(b.smtpSend).not.toHaveBeenCalled();
+  });
+  it("send_message errors when account has no SMTP host", async () => {
+    const { client, b } = await connect(cfg({ SMTP_ENABLED: "true" }));
+    const r: any = await client.callTool({ name: "send_message", arguments: { account: "personal", to: ["a@example.com"], subject: "s", body: "b" } });
+    expect(r.isError).toBe(true);
+    expect(b.smtpSend).not.toHaveBeenCalled();
   });
   it("list_accounts never leaks hosts or passwords", async () => {
     const r = await ctx.client.callTool({ name: "list_accounts", arguments: {} });

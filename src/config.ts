@@ -5,6 +5,8 @@ export interface AccountConfig {
   user: string;
   pass: string;
   tls: boolean;
+  sentFolder?: string;
+  smtp?: { host: string; port: number; tls: boolean };
 }
 
 export interface AppConfig {
@@ -12,6 +14,7 @@ export interface AppConfig {
   port: number;
   host: string;
   maxBodyChars: number;
+  smtpEnabled: boolean;
   accounts: Map<string, AccountConfig>;
 }
 
@@ -43,7 +46,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       user: need("USER"),
       pass: need("PASS"),
       tls,
+      sentFolder: env[p + "SENT"] || undefined,
     };
+    const smtpHost = env[p + "SMTP_HOST"];
+    if (smtpHost) {
+      const stls = bool(env[p + "SMTP_TLS"], true);
+      acct.smtp = { host: smtpHost, port: Number(env[p + "SMTP_PORT"] || 465), tls: stls };
+    }
     accounts.set(name, acct);
   }
   return {
@@ -51,6 +60,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     port: Number(env.PORT || 8787),
     host: env.HOST || "0.0.0.0",
     maxBodyChars: Number(env.MAX_BODY_CHARS || 20000),
+    smtpEnabled: bool(env.SMTP_ENABLED, false),
     accounts,
   };
 }

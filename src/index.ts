@@ -12,6 +12,6 @@ try {
 const c = cfg;
 createApp(c, new ImapBackend()).listen(c.port, c.host, () => {
   console.log(
-    `[imap-mcp] listening on ${c.host}:${c.port} with ${c.accounts.size} account(s); read-only (no SMTP)`,
+    `[imap-mcp] listening on ${c.host}:${c.port} with ${c.accounts.size} account(s); smtp send ${c.smtpEnabled ? "ENABLED" : "disabled"}`,
   );
 });

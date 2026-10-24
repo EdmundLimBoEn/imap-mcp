@@ -1,8 +1,8 @@
 # imap-mcp
 
-A small [MCP](https://modelcontextprotocol.io) server that bridges one or more IMAP mailboxes over **Streamable HTTP**, so AI agents can read, search and triage mail.
+A small [MCP](https://modelcontextprotocol.io) server that bridges one or more IMAP mailboxes over **Streamable HTTP**, so AI agents can read, search and triage mail, and optionally send it.
 
-**Read-only:** there is no SMTP code or dependency, and no tool can send, draft, move or delete mail. The only write is `mark_read` / `mark_unread` (the `\Seen` flag).
+**Read-only by default:** no tool can move or delete mail; `mark_read` / `mark_unread` only touch the `\Seen` flag. Sending is off unless you set `SMTP_ENABLED=true`; when it is off, the `send_message` tool is not registered at all.
 
 ## Tools
 
@@ -14,6 +14,7 @@ A small [MCP](https://modelcontextprotocol.io) server that bridges one or more I
 | `search` | `from`, `subject`, `text`, `since`, `before` (YYYY-MM-DD) |
 | `read_message` | Headers, plain-text body (capped at `MAX_BODY_CHARS`), attachment names. Does not mark the message read |
 | `mark_read` / `mark_unread` | Set or clear `\Seen` on UIDs |
+| `send_message` | **Only when `SMTP_ENABLED=true`.** `account, to[], cc[]?, subject, body, in_reply_to?`. Plain text. `in_reply_to` sets both `In-Reply-To` and `References`. Addresses are validated and CR/LF in any header is rejected. After sending, a copy is APPENDed to the Sent folder (`\Sent` special-use, else `Sent`, or `IMAP_<NAME>_SENT`) |
 
 ## Configuration (env vars only)
 
@@ -26,6 +27,11 @@ A small [MCP](https://modelcontextprotocol.io) server that bridges one or more I
 | `IMAP_<NAME>_PASS` | yes | | Use an app password |
 | `IMAP_<NAME>_PORT` | no | 993 (TLS) / 143 | |
 | `IMAP_<NAME>_TLS` | no | `true` | Implicit TLS |
+| `IMAP_<NAME>_SMTP_HOST` | for sending | | e.g. `smtp.example.com`. Reuses `IMAP_<NAME>_USER` / `_PASS` |
+| `IMAP_<NAME>_SMTP_PORT` | no | `465` | |
+| `IMAP_<NAME>_SMTP_TLS` | no | `true` | Implicit TLS; set `false` for plain/STARTTLS ports |
+| `IMAP_<NAME>_SENT` | no | auto | Sent folder override |
+| `SMTP_ENABLED` | no | `false` | Global gate; `send_message` exists only when `true` |
 | `PORT` | no | `8787` | |
 | `HOST` | no | `0.0.0.0` | Listen address inside the container |
 | `MAX_BODY_CHARS` | no | `20000` | Body cap for `read_message` |
@@ -80,10 +86,10 @@ Example client config:
 ```bash
 npm ci
 npm test                       # unit tests (mocked IMAP layer)
-docker run -d -p 3143:3143 \
-  -e GREENMAIL_OPTS="-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.auth.disabled" \
+docker run -d -p 3025:3025 -p 3143:3143 \
+  -e GREENMAIL_OPTS="-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.users=smoke:smoke@example.test -Dgreenmail.users.login=email" \
   greenmail/standalone:2.1.2
 GREENMAIL_HOST=localhost npm test   # adds the end-to-end smoke test
 ```
 
-CI runs both and publishes `ghcr.io/edmundlimboen/imap-mcp:latest` on pushes to `main`.
+CI runs both and publishes `ghcr.io/edmundlimboen/imap-mcp:latest` (and `:<sha>`) on pushes to `main`, and `:X.Y.Z` for `vX.Y.Z` tags.
