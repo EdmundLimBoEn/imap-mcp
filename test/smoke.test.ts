@@ -16,7 +16,7 @@ describe.skipIf(!host)("smoke: GreenMail", () => {
     IMAP_TEST_HOST: host ?? "localhost",
     IMAP_TEST_PORT: "3143",
     IMAP_TEST_TLS: "false",
-    IMAP_TEST_USER: "smoke@localhost",
+    IMAP_TEST_USER: "smoke@example.test",
     IMAP_TEST_PASS: "smoke",
     IMAP_TEST_SMTP_HOST: host ?? "localhost",
     IMAP_TEST_SMTP_PORT: "3025",
@@ -28,10 +28,10 @@ describe.skipIf(!host)("smoke: GreenMail", () => {
 
   it("lists, searches, reads and flags", async () => {
     // Seed INBOX via IMAP APPEND (test-only; the server itself never appends or sends).
-    const seedClient = new ImapFlow({ host: host!, port: 3143, secure: false, auth: { user: "smoke@localhost", pass: "smoke" }, logger: false });
+    const seedClient = new ImapFlow({ host: host!, port: 3143, secure: false, auth: { user: "smoke@example.test", pass: "smoke" }, logger: false });
     await seedClient.connect();
     const raw = [
-      "From: sender@localhost", "To: smoke@localhost", "Subject: Smoke hello", "MIME-Version: 1.0",
+      "From: sender@example.test", "To: smoke@example.test", "Subject: Smoke hello", "MIME-Version: 1.0",
       'Content-Type: multipart/mixed; boundary="b1"', "", "--b1", "Content-Type: text/plain", "", "body text here",
       "--b1", 'Content-Type: text/plain; name="note.txt"', 'Content-Disposition: attachment; filename="note.txt"', "", "hi", "--b1--", "",
     ].join("\r\n");
@@ -62,7 +62,7 @@ describe.skipIf(!host)("smoke: GreenMail", () => {
     const client = new Client({ name: "smoke", version: "1" });
     await client.connect(ct);
     const r: any = await client.callTool({ name: "send_message", arguments: {
-      account: "test", to: ["smoke@localhost"], subject: "Smoke sent", body: "via smtp", in_reply_to: "<orig@localhost>" } });
+      account: "test", to: ["smoke@example.test"], subject: "Smoke sent", body: "via smtp", in_reply_to: "<orig@example.test>" } });
     expect(r.isError, r.content?.[0]?.text).toBeFalsy();
     const out = JSON.parse(r.content[0].text);
     expect(out).toMatchObject({ sent: true, sentCopy: { saved: true, folder: "Sent" } });
