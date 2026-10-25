@@ -191,7 +191,8 @@ export class ImapBackend implements MailBackend {
       const list = await c.list();
       const folder = acct.sentFolder ?? list.find((m) => m.specialUse === "\\Sent")?.path ?? "Sent";
       if (!list.some((m) => m.path === folder)) await c.mailboxCreate(folder);
-      await c.append(folder, raw, ["\\Seen"]);
+      const appended = await c.append(folder, raw, ["\\Seen"]);
+      if (appended === false) throw new Error("Failed to save Sent copy: IMAP APPEND returned false");
       return { folder };
     });
   }
