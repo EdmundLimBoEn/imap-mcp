@@ -233,10 +233,11 @@ export class ImapBackend implements MailBackend {
           // FETCH can also yield unsolicited or flag-only updates.
           if (!selected.has(m.uid) || !m.envelope) continue;
           const f = m.envelope?.from?.[0];
+          const date = m.envelope?.date ? new Date(m.envelope.date) : undefined;
           out.set(m.uid, {
             uid: m.uid,
             uidValidity,
-            date: m.envelope?.date ? new Date(m.envelope.date).toISOString() : undefined,
+            date: date && Number.isFinite(date.getTime()) ? date.toISOString() : undefined,
             from: f ? (f.name ? `${f.name} <${f.address}>` : f.address) : undefined,
             subject: m.envelope?.subject,
             seen: m.flags?.has("\\Seen") ?? false,
