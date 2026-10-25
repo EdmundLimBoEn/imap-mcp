@@ -18,6 +18,8 @@ A small [MCP](https://modelcontextprotocol.io) server that bridges one or more I
 
 Message results include `uidValidity` as a decimal string. Pass it with the same account, folder and UID(s) to `read_message`, `mark_read`, and `mark_unread`. If the mailbox UIDVALIDITY changes, these operations reject the stale reference; list or search again before retrying.
 
+If HTML-to-text conversion fails, `read_message` includes `bodyUnavailable: "conversion_failed"` while preserving available headers, attachment metadata, and any available text. The body may be incomplete even when `truncated` is false; `truncated` only indicates the character cap.
+
 ## Configuration (env vars only)
 
 | Var | Required | Default | Notes |

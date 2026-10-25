@@ -24,6 +24,8 @@ export interface FullMessage extends MessageSummary {
   cc?: string;
   messageId?: string;
   body: string;
+  /** Conversion failed; any returned body may be incomplete. */
+  bodyUnavailable?: "conversion_failed";
   truncated: boolean;
   attachments: { filename: string; contentType: string; size: number }[];
 }
@@ -277,6 +279,8 @@ export class ImapBackend implements MailBackend {
         }
         // Only complete, byte-bounded input reaches the buffering MIME parser.
         const p = await simpleParser(Buffer.concat(chunks, bytes));
+        // MailParser exposes this at runtime, but its external types omit it.
+        const conversionFailed = Boolean((p as typeof p & { textConversionError?: unknown }).textConversionError);
         const text = p.text ?? "";
         const addr = (a: any) => (a ? (Array.isArray(a) ? a.map((x) => x.text).join(", ") : a.text) : undefined);
         return {
@@ -290,6 +294,7 @@ export class ImapBackend implements MailBackend {
           messageId: p.messageId,
           seen: m.flags?.has("\\Seen") ?? false,
           body: text.slice(0, maxChars),
+          ...(conversionFailed ? { bodyUnavailable: "conversion_failed" as const } : {}),
           truncated: text.length > maxChars,
           attachments: p.attachments.map((a) => ({
             filename: a.filename ?? "(unnamed)",
