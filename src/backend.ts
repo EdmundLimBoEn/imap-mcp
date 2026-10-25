@@ -106,6 +106,36 @@ export function toSearchObject(q: SearchQuery): SearchObject {
   return s;
 }
 
+/** Keep only the largest UIDs in a min-heap; SEARCH results need not be ordered. */
+function selectNewestUids(uids: number[], limit: number): number[] {
+  const heap: number[] = [];
+  if (limit <= 0) return heap;
+  for (const uid of uids) {
+    if (heap.length < limit) {
+      let i = heap.length;
+      heap.push(uid);
+      while (i > 0) {
+        const parent = Math.floor((i - 1) / 2);
+        if (heap[parent] <= uid) break;
+        heap[i] = heap[parent];
+        i = parent;
+      }
+      heap[i] = uid;
+    } else if (uid > heap[0]) {
+      let i = 0;
+      while (2 * i + 1 < heap.length) {
+        let child = 2 * i + 1;
+        if (child + 1 < heap.length && heap[child + 1] < heap[child]) child++;
+        if (heap[child] >= uid) break;
+        heap[i] = heap[child];
+        i = child;
+      }
+      heap[i] = uid;
+    }
+  }
+  return heap;
+}
+
 export class ImapBackend implements MailBackend {
   private readonly allowPlaintextForTests: boolean;
 
@@ -175,7 +205,7 @@ export class ImapBackend implements MailBackend {
       try {
         const uids = await c.search(toSearchObject(q), { uid: true });
         if (!uids) throw new MailOperationError("IMAP search failed");
-        const pick = uids.sort((a, b) => b - a).slice(0, limit);
+        const pick = selectNewestUids(uids, limit);
         if (pick.length === 0) return [];
         const out: MessageSummary[] = [];
         for await (const m of c.fetch(pick, { uid: true, envelope: true, flags: true }, { uid: true })) {
