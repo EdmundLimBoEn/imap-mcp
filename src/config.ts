@@ -25,6 +25,15 @@ export function parseBoolean(v: string | undefined, d: boolean, name: string): b
   throw new Error(`Invalid boolean setting: ${name}`);
 }
 
+function parseInteger(value: string | undefined, fallback: number, name: string, max: number): number {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!/^[0-9]+$/.test(value) || !Number.isSafeInteger(parsed) || parsed < 1 || parsed > max) {
+    throw new Error(`Invalid numeric setting: ${name} (expected an integer from 1 to ${max})`);
+  }
+  return parsed;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   parseBoolean(env.IMAP_TLS_INSECURE, false, "IMAP_TLS_INSECURE");
   const bearerToken = env.MCP_BEARER_TOKEN ?? "";
@@ -47,7 +56,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     const acct: AccountConfig = {
       name,
       host: need("HOST"),
-      port: Number(env[p + "PORT"] || (tls ? 993 : 143)),
+      port: parseInteger(env[p + "PORT"], tls ? 993 : 143, p + "PORT", 65535),
       user: need("USER"),
       pass: need("PASS"),
       tls,
@@ -56,15 +65,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     const smtpHost = env[p + "SMTP_HOST"];
     if (smtpHost) {
       const stls = parseBoolean(env[p + "SMTP_TLS"], true, p + "SMTP_TLS");
-      acct.smtp = { host: smtpHost, port: Number(env[p + "SMTP_PORT"] || 465), tls: stls };
+      acct.smtp = { host: smtpHost, port: parseInteger(env[p + "SMTP_PORT"], 465, p + "SMTP_PORT", 65535), tls: stls };
     }
     accounts.set(name, acct);
   }
   return {
     bearerToken,
-    port: Number(env.PORT || 8787),
+    port: parseInteger(env.PORT, 8787, "PORT", 65535),
     host: env.HOST || "0.0.0.0",
-    maxBodyChars: Number(env.MAX_BODY_CHARS || 20000),
+    maxBodyChars: parseInteger(env.MAX_BODY_CHARS, 20000, "MAX_BODY_CHARS", 1_048_576),
     smtpEnabled: parseBoolean(env.SMTP_ENABLED, false, "SMTP_ENABLED"),
     accounts,
   };

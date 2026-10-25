@@ -94,6 +94,30 @@ describe("IMAP command outcomes through MCP", () => {
     expect(imap.close).not.toHaveBeenCalled();
   });
 
+  it.each(["search", "list_messages"])("%s filters and deduplicates FETCH updates with invalid dates", async (name) => {
+    imap.search.mockResolvedValue([1, 2, 3]);
+    imap.fetch.mockImplementation(async function* () {
+      yield { uid: 1, envelope: { subject: "Outside the page" } };
+      yield { uid: 99, envelope: { date: "malformed date" } };
+      yield { uid: 2, flags: new Set() };
+      yield { uid: 3, envelope: { date: new Date(NaN), subject: "Invalid date" } };
+      yield { uid: 2, envelope: {} };
+      yield { uid: 3, envelope: { date: new Date(NaN), subject: "Invalid date" } };
+      yield { uid: 3, flags: new Set(["\\Seen"]) };
+    });
+    const result = await client.callTool({ name, arguments: { account: "work", limit: 2 } });
+    expect(result.isError).not.toBe(true);
+    expect(result.content).toEqual([{
+      type: "text",
+      text: JSON.stringify([
+        { uid: 3, uidValidity: "123", subject: "Invalid date", seen: false },
+        { uid: 2, uidValidity: "123", seen: false },
+      ], null, 2),
+    }]);
+    expect(imap.release).toHaveBeenCalledOnce();
+    expect(imap.logout).toHaveBeenCalledOnce();
+  });
+
   it.each(["mark_read", "mark_unread"])("%s rejects stale references before updating flags", async (name) => {
     imap.mailbox.uidValidity = 124n;
     const result = await client.callTool({ name, arguments: {

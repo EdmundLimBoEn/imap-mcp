@@ -24,6 +24,8 @@ export interface FullMessage extends MessageSummary {
   cc?: string;
   messageId?: string;
   body: string;
+  /** Conversion failed; any returned body may be incomplete. */
+  bodyUnavailable?: "conversion_failed";
   truncated: boolean;
   attachments: { filename: string; contentType: string; size: number }[];
 }
@@ -227,11 +229,14 @@ export class ImapBackend implements MailBackend {
         if (!uids) throw new MailOperationError("IMAP search failed");
         const pick = selectNewestUids(uids, limit);
         if (pick.length === 0) return [];
-        const out: MessageSummary[] = [];
+        const selected = new Set(pick);
+        const out = new Map<number, MessageSummary>();
         for await (const m of c.fetch(pick, { uid: true, envelope: true, flags: true }, { uid: true })) {
+          // FETCH can also yield unsolicited or flag-only updates.
+          if (!selected.has(m.uid) || !m.envelope) continue;
           const f = m.envelope?.from?.[0];
           const date = m.envelope?.date ? new Date(m.envelope.date) : undefined;
-          out.push({
+          out.set(m.uid, {
             uid: m.uid,
             uidValidity,
             date: date && Number.isFinite(date.getTime()) ? date.toISOString() : undefined,
@@ -240,7 +245,7 @@ export class ImapBackend implements MailBackend {
             seen: m.flags?.has("\\Seen") ?? false,
           });
         }
-        return out.sort((a, b) => b.uid - a.uid);
+        return [...out.values()].sort((a, b) => b.uid - a.uid);
       } finally {
         lock.release();
       }
@@ -276,11 +281,14 @@ export class ImapBackend implements MailBackend {
         } finally {
           content.destroy();
         }
+        if (bytes !== m.size) throw new MailOperationError("Incomplete message download: size mismatch");
         // Only complete, byte-bounded input reaches the buffering MIME parser.
         const p = await simpleParser(Buffer.concat(chunks, bytes), {
           skipTextToHtml: true,
           skipImageLinks: true,
         });
+        // MailParser exposes this at runtime, but its external types omit it.
+        const conversionFailed = Boolean((p as typeof p & { textConversionError?: unknown }).textConversionError);
         const text = p.text ?? "";
         const addr = (a: any) => (a ? (Array.isArray(a) ? a.map((x) => x.text).join(", ") : a.text) : undefined);
         return {
@@ -294,6 +302,7 @@ export class ImapBackend implements MailBackend {
           messageId: p.messageId,
           seen: m.flags?.has("\\Seen") ?? false,
           body: text.slice(0, maxChars),
+          ...(conversionFailed ? { bodyUnavailable: "conversion_failed" as const } : {}),
           truncated: text.length > maxChars,
           attachments: p.attachments.map((a) => ({
             filename: a.filename ?? "(unnamed)",
@@ -363,7 +372,8 @@ export class ImapBackend implements MailBackend {
       const list = await c.list();
       const folder = acct.sentFolder ?? list.find((m) => m.specialUse === "\\Sent")?.path ?? "Sent";
       if (!list.some((m) => m.path === folder)) await c.mailboxCreate(folder);
-      await c.append(folder, raw, ["\\Seen"]);
+      const result = await c.append(folder, raw, ["\\Seen"]);
+      if (!result) throw new MailOperationError("IMAP APPEND failed");
       return { folder };
     });
   }
