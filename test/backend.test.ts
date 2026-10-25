@@ -74,11 +74,56 @@ describe("bounded message reads", () => {
     expect(client.logout).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { html: "<div>".repeat(1001) + "Important content" + "</div>".repeat(1001), failed: true, body: "" },
+    { html: "<p>Important content</p>", failed: false, body: "Important content" },
+    { html: "", failed: false, body: "" },
+  ])("distinguishes HTML conversion failure from readable or empty bodies (failed=$failed)", async ({ html, failed, body }) => {
+    const source = Buffer.from([
+      "From: sender@example.com", "To: recipient@example.com", "Subject: bounded message",
+      "Cc: copy@example.com", "Message-ID: <html@example.com>", "Date: Thu, 01 Jan 2026 00:00:00 +0000",
+      "Content-Type: text/html; charset=utf-8", "", html,
+    ].join("\r\n"));
+    client.fetchOne.mockResolvedValue({ uid: 7, size: source.length, flags: new Set(["\\Seen"]) });
+    client.download.mockResolvedValue({ content: Readable.from([source]) });
+
+    const message = await read();
+    expect(message).toMatchObject({
+      uid: 7, uidValidity: "123", seen: true, subject: "bounded message",
+      from: "sender@example.com", to: "recipient@example.com", cc: "copy@example.com",
+      messageId: "<html@example.com>", date: "2026-01-01T00:00:00.000Z",
+      body, truncated: false,
+      attachments: [],
+    });
+    if (failed) {
+      expect(message).toHaveProperty("bodyUnavailable", "conversion_failed");
+    } else {
+      expect(message).not.toHaveProperty("bodyUnavailable");
+    }
+    expect(message).not.toHaveProperty("textConversionError");
+    expect(release).toHaveBeenCalledOnce();
+    expect(client.logout).toHaveBeenCalledOnce();
+  });
+
   it.each([undefined, -1, NaN, Infinity, 1.5])("rejects unusable advertised size %s", async (size) => {
     client.fetchOne.mockResolvedValue({ uid: 7, size, source: raw });
     await expect(read()).rejects.toThrow("Message size unavailable");
     expect(client.download).not.toHaveBeenCalled();
     expect(simpleParser).not.toHaveBeenCalled();
+  });
+
+  it("preserves available text and attachment metadata when another body part cannot be converted", async () => {
+    const source = Buffer.from(raw.toString().replace("--boundary--", [
+      "--boundary", "Content-Type: text/html", "",
+      "<div>".repeat(1001) + "Unavailable content" + "</div>".repeat(1001), "--boundary--",
+    ].join("\r\n")));
+    client.fetchOne.mockResolvedValue({ uid: 7, size: source.length });
+    client.download.mockResolvedValue({ content: Readable.from([source]) });
+    expect(await read()).toMatchObject({
+      subject: "bounded message", body: "A body longer than t", truncated: true,
+      bodyUnavailable: "conversion_failed",
+      attachments: [{ filename: "a.bin", contentType: "application/octet-stream", size: 5 }],
+    });
   });
 
   it("rejects an underreported message on overflow and destroys the stream before parsing", async () => {
