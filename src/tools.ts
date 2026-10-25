@@ -3,6 +3,8 @@ import { z } from "zod";
 import type { AppConfig } from "./config.js";
 import { buildRaw, isValidSearchDate, validateSearchDates, type MailBackend } from "./backend.js";
 
+import { OperationLimits } from "./limits.js";
+
 const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] });
 const fail = (msg: string) => ({ content: [{ type: "text" as const, text: msg }], isError: true });
 const noCrlf = (s: string) => !/[\r\n]/.test(s);
@@ -13,7 +15,7 @@ const uidValidity = z.string().regex(/^[1-9][0-9]{0,9}$/)
   .describe("Mailbox UIDVALIDITY string returned by list_messages or search; required to reject stale UIDs");
 const date = z.string().refine(isValidSearchDate, "Calendar-valid YYYY-MM-DD required");
 
-export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
+export function buildServer(cfg: AppConfig, backend: MailBackend, limits = new OperationLimits(), caller?: AbortSignal): McpServer {
   // Allow the largest valid input (500 UIDs plus fields), while bounding validation work.
   const server = new McpServer({ name: "imap-mcp", version: "0.2.0" }, { maxToolInputElements: 1024 });
   const acctSchema = z.string().describe("Account name from list_accounts");
@@ -23,10 +25,13 @@ export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
     return a;
   };
   const wrap =
-    <A,>(fn: (args: A) => Promise<unknown>) =>
+    <A,>(fn: (args: A) => Promise<unknown>, mutation = false, send = false) =>
     async (args: A) => {
       try {
-        return ok(await fn(args));
+        const name = (args as { account?: string }).account;
+        const account = name ? get(name).name.toLowerCase() : "";
+        if (send) limits.quota("sends");
+        return ok(await limits.run(account, mutation ? undefined : caller, () => fn(args)));
       } catch (e) {
         return fail(`Error: ${(e as Error).message}`);
       }
@@ -115,7 +120,7 @@ export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
         await backend.setSeen(get(a.account), a.folder, a.uids, a.uidValidity, seen);
         // IMAP acknowledges the command but does not verify a changed-message count.
         return { requested: a.uids.length, seen };
-      }),
+      }, true),
     );
   }
 
@@ -146,7 +151,7 @@ export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
           sentCopy = { saved: false, error: (e as Error).message };
         }
         return { sent: true, messageId: sent.messageId, sentCopy };
-      }),
+      }, true, true),
     );
   }
   return server;

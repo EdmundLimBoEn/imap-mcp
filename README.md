@@ -103,3 +103,15 @@ GREENMAIL_HOST=localhost npm test   # adds the end-to-end smoke test
 ```
 
 CI runs both and publishes `ghcr.io/edmundlimboen/imap-mcp:latest` (and `:<sha>`) on pushes to `main`, and `:X.Y.Z` for `vX.Y.Z` tags.
+
+Mail work is bounded per server process: at most 8 operations globally, 2 per
+account, and 16 queued operations. Queue wait counts toward a 30-second operation
+deadline. The shared bearer principal has fixed-window quotas of 120 HTTP MCP
+requests and 10 send attempts per minute, shared across accounts and connections.
+At most 24 HTTP MCP requests may be in flight (including body upload), each with
+a 30-second deadline. HTTP admission failures return 429 with `Retry-After`;
+operation queue/deadline and send-quota failures return MCP tool errors.
+Disconnecting cancels unfinished reads and removes queued reads. Mutations keep
+their operation deadline so disconnecting does not silently interrupt a send;
+a timed-out mutation may have completed remotely and should not be blindly retried.
+Limits are process-local; multiple replicas each have their own budget.

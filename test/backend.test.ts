@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { simpleParser } from "mailparser";
 import { ImapBackend, MAX_MESSAGE_BYTES } from "../src/backend.js";
 import { cfg } from "./helpers.js";
+import { operationContext } from "../src/limits.js";
 
 const { createClient } = vi.hoisted(() => ({ createClient: vi.fn() }));
 vi.mock("imapflow", () => ({
@@ -139,6 +140,21 @@ describe("bounded message reads", () => {
     expect(simpleParser).not.toHaveBeenCalled();
   });
 
+  it("cancels stalled logout after a local size rejection", async () => {
+    const caller = new AbortController();
+    client.fetchOne.mockResolvedValue({ uid: 7, size: MAX_MESSAGE_BYTES + 1 });
+    client.logout.mockImplementationOnce(() => new Promise<never>(() => {}));
+    const result = operationContext.run(caller.signal, read);
+    const rejected = expect(result).rejects.toThrow("operation cancelled");
+    await vi.waitFor(() => expect(client.logout).toHaveBeenCalledOnce());
+    caller.abort(new Error("operation cancelled"));
+    await rejected;
+    expect(client.close).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    expect(simpleParser).not.toHaveBeenCalled();
+    expect(() => client.emit("error", rawError())).not.toThrow();
+  });
+
   it("returns null when the message is missing", async () => {
     client.fetchOne.mockResolvedValue(false);
     expect(await read()).toBeNull();
@@ -184,6 +200,24 @@ describe("IMAP connection lifecycle", () => {
 
     createClient.mockReturnValueOnce(mockClient());
     await expect(backend.listFolders(account)).resolves.toEqual([{ path: "INBOX" }]);
+  });
+
+  it.each(["connect", "list", "logout"] as const)("cancels a stalled %s and handles late socket errors", async (phase) => {
+    const caller = new AbortController();
+    let finish!: () => void;
+    client[phase].mockImplementationOnce(() => new Promise<any>((resolve) => { finish = () => resolve([]); }));
+    const result = operationContext.run(caller.signal, () => backend.listFolders(account));
+    const rejected = expect(result).rejects.toThrow("IMAP operation failed");
+    await vi.waitFor(() => expect(client[phase]).toHaveBeenCalledOnce());
+    caller.abort();
+    await rejected;
+    expect(client.close).toHaveBeenCalledOnce();
+    expect(() => client.emit("error", rawError())).not.toThrow();
+    finish();
+    await new Promise(resolve => setImmediate(resolve));
+    expect(client.close).toHaveBeenCalledOnce();
+    if (phase === "connect") expect(client.list).not.toHaveBeenCalled();
+    if (phase !== "logout") expect(client.logout).not.toHaveBeenCalled();
   });
 
   it("attaches the listener before connect and does not use a failed connection", async () => {
