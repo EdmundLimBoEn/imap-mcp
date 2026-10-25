@@ -283,7 +283,10 @@ export class ImapBackend implements MailBackend {
         }
         if (bytes !== m.size) throw new MailOperationError("Incomplete message download: size mismatch");
         // Only complete, byte-bounded input reaches the buffering MIME parser.
-        const p = await simpleParser(Buffer.concat(chunks, bytes));
+        const p = await simpleParser(Buffer.concat(chunks, bytes), {
+          skipTextToHtml: true,
+          skipImageLinks: true,
+        });
         // MailParser exposes this at runtime, but its external types omit it.
         const conversionFailed = Boolean((p as typeof p & { textConversionError?: unknown }).textConversionError);
         const text = p.text ?? "";
