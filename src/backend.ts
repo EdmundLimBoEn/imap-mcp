@@ -75,18 +75,21 @@ export function toSearchObject(q: SearchQuery): SearchObject {
   return s;
 }
 
+// Only locally generated validation errors may cross the protocol error boundary.
+class UidValidityError extends Error {}
+
 // ImapFlow exposes UIDVALIDITY as bigint; use a decimal string on the JSON boundary.
 function mailboxUidValidity(c: ImapFlow): string {
   const value = c.mailbox && c.mailbox.uidValidity;
   if (!value || value < 1n || value > 4294967295n) {
-    throw new Error("Mailbox UIDVALIDITY unavailable");
+    throw new UidValidityError("Mailbox UIDVALIDITY unavailable");
   }
   return value.toString();
 }
 
 function requireUidValidity(c: ImapFlow, expected: string): void {
   if (mailboxUidValidity(c) !== expected) {
-    throw new Error("Stale message reference: UIDVALIDITY changed; list or search messages again");
+    throw new UidValidityError("Stale message reference: UIDVALIDITY changed; list or search messages again");
   }
 }
 
@@ -100,11 +103,42 @@ export class ImapBackend implements MailBackend {
       logger: false,
       tls: { rejectUnauthorized: process.env.IMAP_TLS_INSECURE !== "true" },
     });
-    await c.connect();
+    let closed = false;
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      try { c.close(); } catch { /* Cleanup must not expose protocol errors. */ }
+    };
+    const failure = new Error("IMAP operation failed");
+    const connectionError = new Promise<never>((_resolve, reject) => {
+      // Keep the listener for late socket errors, including those during close.
+      c.on("error", () => {
+        reject(failure);
+        close();
+      });
+    });
     try {
-      return await fn(c);
-    } finally {
-      await c.logout().catch(() => c.close());
+      return await Promise.race([
+        connectionError,
+        (async () => {
+          await c.connect();
+          if (closed) throw failure;
+          let result: T;
+          try {
+            result = await fn(c);
+          } catch (error) {
+            if (error instanceof UidValidityError && !closed) await c.logout().catch(close);
+            throw error;
+          }
+          if (closed) throw failure;
+          await c.logout().catch(close);
+          return result;
+        })(),
+      ]);
+    } catch (error) {
+      if (error instanceof UidValidityError && !closed) throw error;
+      close();
+      throw failure;
     }
   }
 
