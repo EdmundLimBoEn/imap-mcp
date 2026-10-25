@@ -6,6 +6,8 @@ import { buildServer } from "../src/tools.js";
 import { cfg } from "./helpers.js";
 
 const imap = vi.hoisted(() => ({
+  on: vi.fn(),
+  close: vi.fn(),
   connect: vi.fn(),
   logout: vi.fn(),
   release: vi.fn(),

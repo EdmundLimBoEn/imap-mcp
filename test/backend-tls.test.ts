@@ -6,6 +6,8 @@ import { cfg } from "./helpers.js";
 
 vi.mock("imapflow", () => ({
   ImapFlow: vi.fn(class {
+    on = vi.fn();
+    close = vi.fn();
     connect = vi.fn().mockResolvedValue(undefined);
     list = vi.fn().mockResolvedValue([]);
     logout = vi.fn().mockResolvedValue(undefined);

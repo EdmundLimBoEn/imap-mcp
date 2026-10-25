@@ -5,6 +5,12 @@ import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import type { AccountConfig } from "./config.js";
 import { parseBoolean } from "./config.js";
 
+// Bound raw MIME input (including attachments) independently of the returned body cap.
+export const MAX_MESSAGE_BYTES = 1024 * 1024;
+
+// Only locally generated, fixed messages may bypass protocol-error redaction.
+class MailOperationError extends Error {}
+
 export interface MessageSummary {
   uid: number;
   date?: string;
@@ -139,7 +145,12 @@ export class ImapBackend implements MailBackend {
           return result;
         })(),
       ]);
-    } catch {
+    } catch (error) {
+      if (error instanceof MailOperationError && !closed) {
+        await Promise.race([connectionError, c.logout().catch(close)]);
+        if (closed) throw failure;
+        throw error;
+      }
       close();
       throw failure;
     }
@@ -156,7 +167,7 @@ export class ImapBackend implements MailBackend {
       const lock = await c.getMailboxLock(folder, { readOnly: true });
       try {
         const uids = await c.search(toSearchObject(q), { uid: true });
-        if (!uids) throw new Error("IMAP search failed");
+        if (!uids) throw new MailOperationError("IMAP search failed");
         const pick = uids.sort((a, b) => b - a).slice(0, limit);
         if (pick.length === 0) return [];
         const out: MessageSummary[] = [];
@@ -182,9 +193,31 @@ export class ImapBackend implements MailBackend {
       const lock = await c.getMailboxLock(folder, { readOnly: true });
       try {
         // BODY.PEEK: reading does not set \Seen.
-        const m = await c.fetchOne(String(uid), { uid: true, source: true, flags: true }, { uid: true });
-        if (!m || !m.source) return null;
-        const p = await simpleParser(m.source);
+        const m = await c.fetchOne(String(uid), { uid: true, size: true, flags: true }, { uid: true });
+        if (!m) return null;
+        if (typeof m.size !== "number" || !Number.isSafeInteger(m.size) || m.size < 0) {
+          throw new MailOperationError("Message size unavailable");
+        }
+        if (m.size > MAX_MESSAGE_BYTES) throw new MailOperationError("Message exceeds the 1 MiB read limit");
+        // One extra byte detects overflow instead of parsing a silently truncated message.
+        const { content } = await c.download(String(uid), undefined, {
+          uid: true, maxBytes: MAX_MESSAGE_BYTES + 1, chunkSize: 64 * 1024,
+        });
+        if (!content) return null;
+        const chunks: Buffer[] = [];
+        let bytes = 0;
+        try {
+          for await (const chunk of content) {
+            const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+            bytes += buffer.length;
+            if (bytes > MAX_MESSAGE_BYTES) throw new MailOperationError("Message exceeds the 1 MiB read limit");
+            chunks.push(buffer);
+          }
+        } finally {
+          content.destroy();
+        }
+        // Only complete, byte-bounded input reaches the buffering MIME parser.
+        const p = await simpleParser(Buffer.concat(chunks, bytes));
         const text = p.text ?? "";
         const addr = (a: any) => (a ? (Array.isArray(a) ? a.map((x) => x.text).join(", ") : a.text) : undefined);
         return {
@@ -217,7 +250,7 @@ export class ImapBackend implements MailBackend {
         const success = seen
           ? await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true })
           : await c.messageFlagsRemove(uids, ["\\Seen"], { uid: true });
-        if (!success) throw new Error("IMAP flag update failed");
+        if (!success) throw new MailOperationError("IMAP flag update failed");
       } finally {
         lock.release();
       }
