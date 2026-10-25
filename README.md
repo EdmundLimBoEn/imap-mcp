@@ -98,7 +98,7 @@ npm ci
 npm test                       # unit tests (mocked IMAP layer)
 docker run -d -p 3025:3025 -p 3143:3143 \
   -e GREENMAIL_OPTS="-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.users=smoke:smoke@example.test -Dgreenmail.users.login=email" \
-  greenmail/standalone:2.1.2
+  greenmail/standalone:2.1.12
 GREENMAIL_HOST=localhost npm test   # adds the end-to-end smoke test
 ```
 
