@@ -40,6 +40,10 @@ A small [MCP](https://modelcontextprotocol.io) server that bridges one or more I
 
 `<NAME>` is the account name upper-cased. See [`.env.example`](.env.example).
 
+`read_message` rejects messages larger than 1 MiB of raw MIME data, including attachments,
+before parsing. It checks the reported size before downloading and enforces the byte cap
+during download, independently of `MAX_BODY_CHARS`.
+
 ## Run
 
 ```bash
