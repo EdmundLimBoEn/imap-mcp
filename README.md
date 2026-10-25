@@ -2,7 +2,7 @@
 
 A small [MCP](https://modelcontextprotocol.io) server that bridges one or more IMAP mailboxes over **Streamable HTTP**, so AI agents can read, search and triage mail, and optionally send it.
 
-**Read-only by default:** no tool can move or delete mail; `mark_read` / `mark_unread` only touch the `\Seen` flag. Sending is off unless you set `SMTP_ENABLED=true`; when it is off, the `send_message` tool is not registered at all.
+**Enabled by default: reading, searching and read-status changes.** No tool can move or delete mail; `mark_read` / `mark_unread` only touch the `\Seen` flag. Sending is off unless you set `SMTP_ENABLED=true`; when it is off, the `send_message` tool is not registered at all.
 
 ## Tools
 

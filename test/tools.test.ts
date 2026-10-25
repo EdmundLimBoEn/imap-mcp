@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFileSync } from "node:fs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildServer } from "../src/tools.js";
@@ -34,6 +35,16 @@ describe("tools", () => {
   it("gate off: no send_message tool", async () => {
     const names = (await ctx.client.listTools()).tools.map((t) => t.name).sort();
     expect(names).toEqual(["list_accounts", "list_folders", "list_messages", "mark_read", "mark_unread", "read_message", "search"]);
+  });
+  it("README describes the default tools without claiming read-only access", async () => {
+    const names = (await ctx.client.listTools()).tools.map((t) => t.name);
+    expect(names).toEqual(expect.arrayContaining(["read_message", "search", "mark_read", "mark_unread"]));
+    expect(names).not.toContain("send_message");
+
+    const intro = readFileSync(new URL("../README.md", import.meta.url), "utf8").split("## Tools")[0];
+    expect(intro).not.toMatch(/read[ -]only by default/i);
+    expect(intro).toMatch(/default[^\n]*reading[^\n]*searching[^\n]*read-status changes/i);
+    expect(intro).toMatch(/sending is off unless you set `SMTP_ENABLED=true`/i);
   });
   it("gate on: send_message registered", async () => {
     const { client } = await connect(cfg({ SMTP_ENABLED: "true" }));
