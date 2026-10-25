@@ -24,7 +24,7 @@ describe.skipIf(!host)("smoke: GreenMail", () => {
     SMTP_ENABLED: "true",
   });
   const acct = cfg.accounts.get("test")!;
-  const b = new ImapBackend();
+  const b = new ImapBackend({ allowPlaintextForTests: true });
 
   it("lists, searches, reads and flags", async () => {
     // Seed INBOX via IMAP APPEND (test-only; the server itself never appends or sends).
