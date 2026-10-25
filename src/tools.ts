@@ -107,7 +107,8 @@ export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
       },
       wrap(async (a: { account: string; folder: string; uids: number[] }) => {
         await backend.setSeen(get(a.account), a.folder, a.uids, seen);
-        return { updated: a.uids.length, seen };
+        // IMAP acknowledges the command but does not verify a changed-message count.
+        return { requested: a.uids.length, seen };
       }),
     );
   }
