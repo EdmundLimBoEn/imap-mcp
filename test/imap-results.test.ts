@@ -8,6 +8,7 @@ import { cfg } from "./helpers.js";
 const imap = vi.hoisted(() => ({
   on: vi.fn(),
   close: vi.fn(),
+  mailbox: { uidValidity: 123n },
   connect: vi.fn(),
   logout: vi.fn(),
   release: vi.fn(),
@@ -29,6 +30,7 @@ describe("IMAP command outcomes through MCP", () => {
 
   beforeEach(async () => {
     vi.resetAllMocks();
+    imap.mailbox.uidValidity = 123n;
     imap.connect.mockResolvedValue(undefined);
     imap.logout.mockResolvedValue(undefined);
     imap.getMailboxLock.mockResolvedValue({ release: imap.release });
@@ -65,11 +67,27 @@ describe("IMAP command outcomes through MCP", () => {
     expect(imap.fetch).not.toHaveBeenCalled();
   });
 
+  it.each(["mark_read", "mark_unread"])("%s rejects stale references before updating flags", async (name) => {
+    imap.mailbox.uidValidity = 124n;
+    const result = await client.callTool({ name, arguments: {
+      account: "work", uidValidity: "123", uids: [7],
+    } });
+    expect(result).toMatchObject({
+      isError: true,
+      content: [{ type: "text", text: expect.stringContaining("Stale message reference") }],
+    });
+    expect(imap.messageFlagsAdd).not.toHaveBeenCalled();
+    expect(imap.messageFlagsRemove).not.toHaveBeenCalled();
+    expect(imap.release).toHaveBeenCalledOnce();
+    expect(imap.logout).toHaveBeenCalledOnce();
+    expect(imap.close).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["mark_read", "messageFlagsAdd", true],
     ["mark_unread", "messageFlagsRemove", false],
   ] as const)("%s rejects refusals and reports only requested counts on success", async (name, method, seen) => {
-    const args = { account: "work", uids: [1, 1, 999] };
+    const args = { account: "work", uidValidity: "123", uids: [1, 1, 999] };
     imap[method].mockResolvedValue(false);
     const refused = await client.callTool({ name, arguments: args });
     expect(refused).toMatchObject({

@@ -7,9 +7,9 @@ import { cfg } from "./helpers.js";
 
 const mock = (): MailBackend => ({
   listFolders: vi.fn(async () => [{ path: "INBOX" }, { path: "Drafts", specialUse: "\\Drafts" }]),
-  search: vi.fn(async () => [{ uid: 7, subject: "hi", seen: false }]),
-  read: vi.fn(async (_a, _f, uid, max) => ({
-    uid, subject: "hi", seen: false, body: "x".repeat(max), truncated: true,
+  search: vi.fn(async () => [{ uid: 7, uidValidity: "123", subject: "hi", seen: false }]),
+  read: vi.fn(async (_a, _f, uid, uidValidity, max) => ({
+    uid, uidValidity, subject: "hi", seen: false, body: "x".repeat(max), truncated: true,
     attachments: [{ filename: "a.pdf", contentType: "application/pdf", size: 10 }],
   })),
   setSeen: vi.fn(async () => {}),
@@ -147,21 +147,37 @@ describe("tools", () => {
     expect(ctx.b.search).toHaveBeenCalledWith(expect.anything(), "INBOX", expect.objectContaining(dates), 50);
   });
   it("read_message caps body using MAX_BODY_CHARS", async () => {
-    const m = parse(await ctx.client.callTool({ name: "read_message", arguments: { account: "work", uid: 7 } }));
+    const m = parse(await ctx.client.callTool({ name: "read_message", arguments: { account: "work", uidValidity: "123", uid: 7 } }));
+    expect(ctx.b.read).toHaveBeenCalledWith(expect.anything(), "INBOX", 7, "123", 50);
+    expect(m.uidValidity).toBe("123");
     expect(m.body.length).toBe(50);
     expect(m.attachments[0].filename).toBe("a.pdf");
   });
   it("mark_read / mark_unread", async () => {
-    await ctx.client.callTool({ name: "mark_read", arguments: { account: "work", uids: [1, 2] } });
-    await ctx.client.callTool({ name: "mark_unread", arguments: { account: "work", uids: [3] } });
-    expect(ctx.b.setSeen).toHaveBeenNthCalledWith(1, expect.anything(), "INBOX", [1, 2], true);
-    expect(ctx.b.setSeen).toHaveBeenNthCalledWith(2, expect.anything(), "INBOX", [3], false);
+    await ctx.client.callTool({ name: "mark_read", arguments: { account: "work", uidValidity: "123", uids: [1, 2] } });
+    await ctx.client.callTool({ name: "mark_unread", arguments: { account: "work", uidValidity: "123", uids: [3] } });
+    expect(ctx.b.setSeen).toHaveBeenNthCalledWith(1, expect.anything(), "INBOX", [1, 2], "123", true);
+    expect(ctx.b.setSeen).toHaveBeenNthCalledWith(2, expect.anything(), "INBOX", [3], "123", false);
+  });
+  it.each(["read_message", "mark_read", "mark_unread"])("%s requires valid UIDVALIDITY before invoking the backend", async (name) => {
+    for (const value of [undefined, "", "0", "-1", "1.5", "0123", "4294967296", 123]) {
+      const r = await ctx.client.callTool({ name, arguments: {
+        account: "work", uid: 7, uids: [7], ...(value === undefined ? {} : { uidValidity: value }),
+      } });
+      expect(r.isError).toBe(true);
+    }
+    expect(ctx.b.read).not.toHaveBeenCalled();
+    expect(ctx.b.setSeen).not.toHaveBeenCalled();
+  });
+  it.each(["list_messages", "search"])("%s exposes UIDVALIDITY in message references", async (name) => {
+    const result = parse(await ctx.client.callTool({ name, arguments: { account: "work" } }));
+    expect(result[0]).toMatchObject({ uid: 7, uidValidity: "123" });
   });
   it.each(["mark_read", "mark_unread"])("%s accepts the maximum 500 UIDs", async (name) => {
     const uids = Array.from({ length: 500 }, (_, i) => i + 1);
-    const r = await ctx.client.callTool({ name, arguments: { account: "work", folder: "INBOX", uids } });
+    const r = await ctx.client.callTool({ name, arguments: { account: "work", folder: "INBOX", uidValidity: "123", uids } });
     expect(r.isError).not.toBe(true);
-    expect(ctx.b.setSeen).toHaveBeenCalledWith(expect.anything(), "INBOX", uids, name === "mark_read");
+    expect(ctx.b.setSeen).toHaveBeenCalledWith(expect.anything(), "INBOX", uids, "123", name === "mark_read");
   });
   it("enforces the input element budget including nested unknown fields", async () => {
     // Two top-level members, one nested member, and 1,021 array entries total 1,024.

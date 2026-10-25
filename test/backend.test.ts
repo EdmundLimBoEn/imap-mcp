@@ -16,6 +16,7 @@ vi.mock("mailparser", async (original) => {
 });
 
 const mockClient = () => Object.assign(new EventEmitter(), {
+  mailbox: { uidValidity: 123n },
   connect: vi.fn(async () => {}),
   list: vi.fn(async () => [{ path: "INBOX" }]),
   logout: vi.fn(async () => {}),
@@ -25,7 +26,7 @@ const account = cfg().accounts.get("work")!;
 const rawError = () => new Error("synthetic private protocol response");
 
 const release = vi.fn();
-const read = () => new ImapBackend().read(cfg().accounts.get("work")!, "INBOX", 7, 20);
+const read = () => new ImapBackend().read(cfg().accounts.get("work")!, "INBOX", 7, "123", 20);
 const raw = Buffer.from([
   "From: sender@example.com", "To: recipient@example.com", "Subject: bounded message",
   'Content-Type: multipart/mixed; boundary="boundary"', "", "--boundary",
@@ -51,7 +52,7 @@ describe("bounded message reads", () => {
 
   it("checks size before a bounded UID download and preserves parsed results", async () => {
     expect(await read()).toMatchObject({
-      uid: 7, subject: "bounded message", seen: true,
+      uid: 7, uidValidity: "123", subject: "bounded message", seen: true,
       body: "A body longer than t", truncated: true,
       attachments: [{ filename: "a.bin", contentType: "application/octet-stream", size: 5 }],
     });
@@ -264,6 +265,124 @@ describe("SMTP recipient outcomes", () => {
   });
 });
 
+const state = vi.hoisted(() => ({ client: null as any, validity: 123n as bigint | undefined }));
+class UidClient extends EventEmitter {
+  mailbox: any = false;
+  connect = vi.fn(async () => {});
+  logout = vi.fn(async () => {});
+  release = vi.fn();
+  getMailboxLock = vi.fn(async () => {
+    // Mailbox state is only available once the lock has been acquired.
+    this.mailbox = { uidValidity: state.validity };
+    return { release: this.release };
+  });
+  search = vi.fn(async () => [7]);
+  fetch = vi.fn(async function* () {
+    yield { uid: 7, envelope: { subject: "hello" }, flags: new Set() };
+  });
+  fetchOne = vi.fn(async () => ({
+    uid: 7, size: Buffer.byteLength("Subject: hello\r\n\r\nbody"), flags: new Set(),
+  }));
+  download = vi.fn(async () => ({ content: Readable.from([Buffer.from("Subject: hello\r\n\r\nbody")]) }));
+  messageFlagsAdd = vi.fn(async () => true);
+  messageFlagsRemove = vi.fn(async () => true);
+  close = vi.fn();
+  constructor() { super(); state.client = this; }
+}
+
+const backend = new ImapBackend();
+const operations = {
+  read: (value: string) => backend.read(account, "INBOX", 7, value, 100),
+  markRead: (value: string) => backend.setSeen(account, "INBOX", [7], value, true),
+  markUnread: (value: string) => backend.setSeen(account, "INBOX", [7], value, false),
+};
+
+describe("mailbox UIDVALIDITY", () => {
+  beforeEach(() => {
+    state.validity = 123n;
+    createClient.mockReset().mockImplementation(() => new UidClient());
+  });
+
+  it("returns JSON-safe UIDVALIDITY from the locked mailbox in search and read results", async () => {
+    state.validity = 4294967295n;
+    const results = await backend.search(account, "INBOX", {}, 10);
+    expect(JSON.parse(JSON.stringify(results))).toEqual([
+      { uid: 7, uidValidity: "4294967295", subject: "hello", seen: false },
+    ]);
+    const message = await backend.read(account, "INBOX", 7, results[0].uidValidity, 100);
+    expect(message).toMatchObject({ uid: 7, uidValidity: "4294967295", body: "body" });
+    expect(state.client.fetchOne).toHaveBeenCalledWith("7", expect.anything(), { uid: true });
+  });
+
+  it.each(Object.entries(operations))("%s rejects a reused UID after the mailbox is recreated", async (_name, run) => {
+    const [reference] = await backend.search(account, "INBOX", {}, 10);
+    state.validity = 124n;
+    await expect(run(reference.uidValidity)).rejects.toThrow("Stale message reference");
+    expect(state.client.getMailboxLock).toHaveBeenCalledOnce();
+    expect(state.client.fetchOne).not.toHaveBeenCalled();
+    expect(state.client.download).not.toHaveBeenCalled();
+    expect(state.client.messageFlagsAdd).not.toHaveBeenCalled();
+    expect(state.client.messageFlagsRemove).not.toHaveBeenCalled();
+    expect(state.client.release).toHaveBeenCalledOnce();
+    expect(state.client.logout).toHaveBeenCalledOnce();
+  });
+
+  it.each([true, false])("updates flags when UIDVALIDITY matches (seen=%s)", async (seen) => {
+    await backend.setSeen(account, "INBOX", [7], "123", seen);
+    const method = seen ? state.client.messageFlagsAdd : state.client.messageFlagsRemove;
+    expect(method).toHaveBeenCalledWith([7], ["\\Seen"], { uid: true });
+    expect(state.client.release).toHaveBeenCalledOnce();
+  });
+
+  it("sanitizes protocol errors even when they imitate a validation error", async () => {
+    const client = new UidClient();
+    client.fetchOne.mockRejectedValueOnce(new Error("Stale message reference: synthetic private response"));
+    createClient.mockReturnValueOnce(client);
+    await expect(operations.read("123")).rejects.toEqual(new Error("IMAP operation failed"));
+    expect(client.release).toHaveBeenCalledOnce();
+    expect(client.close).toHaveBeenCalledOnce();
+    expect(client.logout).not.toHaveBeenCalled();
+  });
+
+  it("handles a socket error during validation failure logout even if logout never settles", async () => {
+    const client = new UidClient();
+    client.logout.mockImplementationOnce(() => new Promise<never>(() => {}));
+    createClient.mockReturnValueOnce(client);
+    const rejected = expect(operations.read("124")).rejects.toEqual(new Error("IMAP operation failed"));
+    await vi.waitFor(() => expect(client.logout).toHaveBeenCalledOnce());
+    expect(() => client.emit("error", rawError())).not.toThrow();
+    await rejected;
+    expect(client.release).toHaveBeenCalledOnce();
+    expect(client.fetchOne).not.toHaveBeenCalled();
+    expect(client.close).toHaveBeenCalledOnce();
+    expect(() => client.emit("error", rawError())).not.toThrow();
+  });
+
+  it("sanitizes a rejected logout after validation fails", async () => {
+    const client = new UidClient();
+    client.logout.mockRejectedValueOnce(rawError());
+    createClient.mockReturnValueOnce(client);
+    await expect(operations.read("124")).rejects.toEqual(new Error("IMAP operation failed"));
+    expect(client.logout).toHaveBeenCalledOnce();
+    expect(client.close).toHaveBeenCalledOnce();
+    expect(client.release).toHaveBeenCalledOnce();
+    expect(client.download).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the server provides no UIDVALIDITY", async () => {
+    state.validity = undefined;
+    await expect(backend.search(account, "INBOX", {}, 10)).rejects.toThrow("UIDVALIDITY unavailable");
+    expect(state.client.fetch).not.toHaveBeenCalled();
+    for (const run of Object.values(operations)) {
+      await expect(run("123")).rejects.toThrow("UIDVALIDITY unavailable");
+      expect(state.client.fetchOne).not.toHaveBeenCalled();
+      expect(state.client.messageFlagsAdd).not.toHaveBeenCalled();
+      expect(state.client.messageFlagsRemove).not.toHaveBeenCalled();
+      expect(state.client.release).toHaveBeenCalledOnce();
+    }
+  });
+});
+
 describe("bounded UID selection", () => {
   const backend = new ImapBackend();
   let imap: ReturnType<typeof mockClient> & {
@@ -303,6 +422,7 @@ describe("bounded UID selection", () => {
     imap.search.mockResolvedValue(uids);
     const result = await backend.search(account, "INBOX", {}, limit);
     expect(result.map((m) => m.uid)).toEqual(expected);
+    expect(result.map((m) => m.uidValidity)).toEqual(expected.map(() => "123"));
     expect(imap.search).toHaveBeenCalledWith({ all: true }, { uid: true });
     if (expected.length) {
       expect(imap.fetch).toHaveBeenCalledWith(expect.arrayContaining(expected),
@@ -335,6 +455,7 @@ describe("bounded UID selection", () => {
       sort.mockRestore();
     }
     expect(result.map((m) => m.uid)).toEqual(expected);
+    expect(result.map((m) => m.uidValidity)).toEqual(expected.map(() => "123"));
     expect(sortedLengths.every((length) => length <= limit)).toBe(true);
     expect(imap.search).toHaveBeenCalledExactlyOnceWith({
       from: "sender@example.test", subject: "report", body: "invoice",
