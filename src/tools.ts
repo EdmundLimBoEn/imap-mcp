@@ -23,7 +23,11 @@ export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
     async (args: A) => {
       try {
         return ok(await fn(args));
-      } catch {
+      } catch (e) {
+        // Preserve fixed command-refusal messages without exposing protocol details.
+        if (e instanceof Error && (e.message === "IMAP search failed" || e.message === "IMAP flag update failed")) {
+          return fail(`Error: ${e.message}`);
+        }
         return fail("backend_error");
       }
     };
