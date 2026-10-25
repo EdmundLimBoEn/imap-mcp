@@ -48,6 +48,9 @@ during download, independently of `MAX_BODY_CHARS`.
 
 Boolean settings accept `true/false`, `1/0`, `yes/no`, and `on/off` (case-insensitive). Unset or empty values use the default; other values are rejected.
 
+Numeric settings accept decimal digits only: ports must be 1–65535, and `MAX_BODY_CHARS`
+must be 1–1048576. Unset values use the defaults; empty or invalid values prevent startup.
+
 ## Run
 
 ```bash

@@ -3,6 +3,33 @@ import { loadConfig } from "../src/config.js";
 import { baseEnv, cfg } from "./helpers.js";
 
 describe("loadConfig", () => {
+  const numericSettings = ["PORT", "IMAP_WORK_PORT", "IMAP_WORK_SMTP_PORT", "MAX_BODY_CHARS"];
+  it.each(numericSettings)("rejects invalid numeric values for %s without echoing them", (name) => {
+    const max = name === "MAX_BODY_CHARS" ? 1_048_576 : 65535;
+    for (const value of ["", " ", "0", "-1", "1.5", "NaN", "Infinity", "-Infinity", "1e309",
+      "0x10", "1e3", "123junk", "sensitive-test-value", String(max + 1), "9007199254740993"]) {
+      expect(() => cfg({ [name]: value })).toThrow(
+        new Error(`Invalid numeric setting: ${name} (expected an integer from 1 to ${max})`),
+      );
+    }
+  });
+  it.each([1, 65535])("accepts port boundary %s for all transports", (port) => {
+    const c = cfg({ PORT: String(port), IMAP_WORK_PORT: String(port), IMAP_WORK_SMTP_PORT: String(port) });
+    expect(c.port).toBe(port);
+    expect(c.accounts.get("work")!.port).toBe(port);
+    expect(c.accounts.get("work")!.smtp!.port).toBe(port);
+  });
+  it.each([1, 1_048_576])("accepts body limit boundary %s", (limit) => {
+    expect(cfg({ MAX_BODY_CHARS: String(limit) }).maxBodyChars).toBe(limit);
+  });
+  it("preserves numeric defaults when settings are absent", () => {
+    const c = loadConfig({ ...baseEnv, IMAP_PERSONAL_PORT: undefined });
+    expect(c.port).toBe(8787);
+    expect(c.maxBodyChars).toBe(20000);
+    expect(c.accounts.get("work")!.port).toBe(993);
+    expect(c.accounts.get("personal")!.port).toBe(143);
+    expect(c.accounts.get("work")!.smtp!.port).toBe(465);
+  });
   it.each(["IMAP_WORK_TLS", "IMAP_WORK_SMTP_TLS", "SMTP_ENABLED", "IMAP_TLS_INSECURE"])(
     "rejects unknown boolean values for %s without echoing the value",
     (name) => {
