@@ -5,6 +5,13 @@ import { simpleParser } from "mailparser";
 import { createTransport } from "nodemailer";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import type { AccountConfig } from "./config.js";
+import { parseBoolean } from "./config.js";
+
+// Bound raw MIME input (including attachments) independently of the returned body cap.
+export const MAX_MESSAGE_BYTES = 1024 * 1024;
+
+// Only locally generated, fixed messages may bypass protocol-error redaction.
+class MailOperationError extends Error {}
 
 export interface MessageSummary {
   uid: number;
@@ -64,7 +71,25 @@ export interface MailBackend {
   appendSent(acct: AccountConfig, raw: Buffer): Promise<{ folder: string }>;
 }
 
+export function isValidSearchDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+export function validateSearchDates(q: SearchQuery): void {
+  for (const value of [q.since, q.before]) {
+    if (value !== undefined && !isValidSearchDate(value)) {
+      throw new Error("Search dates must be calendar-valid YYYY-MM-DD values");
+    }
+  }
+  if (q.since !== undefined && q.before !== undefined && q.since > q.before) {
+    throw new Error("since must be on or before before");
+  }
+}
+
 export function toSearchObject(q: SearchQuery): SearchObject {
+  validateSearchDates(q);
   const s: SearchObject = {};
   if (q.from) s.from = q.from;
   if (q.subject) s.subject = q.subject;
@@ -76,7 +101,46 @@ export function toSearchObject(q: SearchQuery): SearchObject {
   return s;
 }
 
+/** Keep only the largest UIDs in a min-heap; SEARCH results need not be ordered. */
+function selectNewestUids(uids: number[], limit: number): number[] {
+  const heap: number[] = [];
+  if (limit <= 0) return heap;
+  for (const uid of uids) {
+    if (heap.length < limit) {
+      let i = heap.length;
+      heap.push(uid);
+      while (i > 0) {
+        const parent = Math.floor((i - 1) / 2);
+        if (heap[parent] <= uid) break;
+        heap[i] = heap[parent];
+        i = parent;
+      }
+      heap[i] = uid;
+    } else if (uid > heap[0]) {
+      let i = 0;
+      while (2 * i + 1 < heap.length) {
+        let child = 2 * i + 1;
+        if (child + 1 < heap.length && heap[child + 1] < heap[child]) child++;
+        if (heap[child] >= uid) break;
+        heap[i] = heap[child];
+        i = child;
+      }
+      heap[i] = uid;
+    }
+  }
+  return heap;
+}
+
 export class ImapBackend implements MailBackend {
+  private readonly allowPlaintextForTests: boolean;
+
+  constructor(options: { allowPlaintextForTests?: boolean } = {}) {
+    this.allowPlaintextForTests = options.allowPlaintextForTests === true;
+    if (this.allowPlaintextForTests && process.env.NODE_ENV !== "test") {
+      throw new Error("Plaintext mail connections are only allowed in tests");
+    }
+  }
+
   private async withClient<T>(acct: AccountConfig, fn: (c: ImapFlow) => Promise<T>): Promise<T> {
     const signal = operationContext.getStore() ?? AbortSignal.timeout(DEFAULT_LIMITS.deadlineMs);
     signal.throwIfAborted();
@@ -84,23 +148,48 @@ export class ImapBackend implements MailBackend {
       host: acct.host,
       port: acct.port,
       secure: acct.tls,
+      ...(!acct.tls ? { doSTARTTLS: !this.allowPlaintextForTests } : {}),
       auth: { user: acct.user, pass: acct.pass },
       logger: false,
-      tls: { rejectUnauthorized: process.env.IMAP_TLS_INSECURE !== "true" },
+      tls: { rejectUnauthorized: !parseBoolean(process.env.IMAP_TLS_INSECURE, false, "IMAP_TLS_INSECURE") },
     });
-    const cancel = () => c.close();
-    signal.addEventListener("abort", cancel, { once: true });
+    let closed = false;
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      try { c.close(); } catch { /* Cleanup must not expose protocol errors. */ }
+    };
+    const failure = new Error("IMAP operation failed");
+    const connectionError = new Promise<never>((_resolve, reject) => {
+      // Keep the listener for late socket errors, including those during close.
+      c.on("error", () => {
+        reject(failure);
+        close();
+      });
+    });
+    signal.addEventListener("abort", close, { once: true });
     try {
-      await abortable(c.connect(), signal);
-      signal.throwIfAborted();
-      return await fn(c);
-    } finally {
-      try {
-        if (!signal.aborted) await abortable(c.logout(), signal).catch(() => c.close());
-      } finally {
-        c.close();
-        signal.removeEventListener("abort", cancel);
+      return await abortable(Promise.race([
+        connectionError,
+        (async () => {
+          await c.connect();
+          if (closed) throw failure;
+          const result = await fn(c);
+          if (closed) throw failure;
+          await c.logout().catch(close);
+          return result;
+        })(),
+      ]), signal);
+    } catch (error) {
+      if (error instanceof MailOperationError && !closed) {
+        await abortable(Promise.race([connectionError, c.logout().catch(close)]), signal);
+        if (closed) throw failure;
+        throw error;
       }
+      close();
+      throw failure;
+    } finally {
+      signal.removeEventListener("abort", close);
     }
   }
 
@@ -114,8 +203,9 @@ export class ImapBackend implements MailBackend {
     return this.withClient(acct, async (c) => {
       const lock = await c.getMailboxLock(folder, { readOnly: true });
       try {
-        const uids = (await c.search(toSearchObject(q), { uid: true })) || [];
-        const pick = uids.sort((a, b) => b - a).slice(0, limit);
+        const uids = await c.search(toSearchObject(q), { uid: true });
+        if (!uids) throw new MailOperationError("IMAP search failed");
+        const pick = selectNewestUids(uids, limit);
         if (pick.length === 0) return [];
         const out: MessageSummary[] = [];
         for await (const m of c.fetch(pick, { uid: true, envelope: true, flags: true }, { uid: true })) {
@@ -140,9 +230,31 @@ export class ImapBackend implements MailBackend {
       const lock = await c.getMailboxLock(folder, { readOnly: true });
       try {
         // BODY.PEEK: reading does not set \Seen.
-        const m = await c.fetchOne(String(uid), { uid: true, source: true, flags: true }, { uid: true });
-        if (!m || !m.source) return null;
-        const p = await simpleParser(m.source);
+        const m = await c.fetchOne(String(uid), { uid: true, size: true, flags: true }, { uid: true });
+        if (!m) return null;
+        if (typeof m.size !== "number" || !Number.isSafeInteger(m.size) || m.size < 0) {
+          throw new MailOperationError("Message size unavailable");
+        }
+        if (m.size > MAX_MESSAGE_BYTES) throw new MailOperationError("Message exceeds the 1 MiB read limit");
+        // One extra byte detects overflow instead of parsing a silently truncated message.
+        const { content } = await c.download(String(uid), undefined, {
+          uid: true, maxBytes: MAX_MESSAGE_BYTES + 1, chunkSize: 64 * 1024,
+        });
+        if (!content) return null;
+        const chunks: Buffer[] = [];
+        let bytes = 0;
+        try {
+          for await (const chunk of content) {
+            const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+            bytes += buffer.length;
+            if (bytes > MAX_MESSAGE_BYTES) throw new MailOperationError("Message exceeds the 1 MiB read limit");
+            chunks.push(buffer);
+          }
+        } finally {
+          content.destroy();
+        }
+        // Only complete, byte-bounded input reaches the buffering MIME parser.
+        const p = await simpleParser(Buffer.concat(chunks, bytes));
         const text = p.text ?? "";
         const addr = (a: any) => (a ? (Array.isArray(a) ? a.map((x) => x.text).join(", ") : a.text) : undefined);
         return {
@@ -172,8 +284,10 @@ export class ImapBackend implements MailBackend {
     return this.withClient(acct, async (c) => {
       const lock = await c.getMailboxLock(folder);
       try {
-        if (seen) await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true });
-        else await c.messageFlagsRemove(uids, ["\\Seen"], { uid: true });
+        const success = seen
+          ? await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true })
+          : await c.messageFlagsRemove(uids, ["\\Seen"], { uid: true });
+        if (!success) throw new MailOperationError("IMAP flag update failed");
       } finally {
         lock.release();
       }
@@ -204,8 +318,9 @@ export class ImapBackend implements MailBackend {
       host: acct.smtp.host,
       port: acct.smtp.port,
       secure: acct.smtp.tls,
+      requireTLS: !acct.smtp.tls && !this.allowPlaintextForTests,
       auth: { user: acct.user, pass: acct.pass },
-      tls: { rejectUnauthorized: process.env.IMAP_TLS_INSECURE !== "true" },
+      tls: { rejectUnauthorized: !parseBoolean(process.env.IMAP_TLS_INSECURE, false, "IMAP_TLS_INSECURE") },
     });
     try {
       const info = await abortable(t.sendMail({ envelope, raw }), signal);

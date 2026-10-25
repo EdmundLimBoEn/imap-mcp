@@ -88,6 +88,32 @@ describe("tools", () => {
     expect(ctx.b.search).toHaveBeenCalledWith(expect.anything(), "INBOX",
       { from: "a@b.c", subject: undefined, text: "invoice", since: "2026-01-01", before: "2026-02-01" }, 50);
   });
+  it.each(["since", "before"])("search rejects invalid %s dates before calling the backend", async (field) => {
+    for (const value of ["2026-99-99junk", "2026-01-01junk", "2026-01-01\n", "2026-01-01T00:00:00Z",
+      "2026-2-01", "2026-00-01", "2026-13-01", "2026-01-00", "2026-04-31", "2026-02-29", "1900-02-29", ""]) {
+      const r = await ctx.client.callTool({ name: "search", arguments: {
+        account: "work", from: "sender@example.com", [field]: value,
+      } });
+      expect(r.isError, value).toBe(true);
+    }
+    expect(ctx.b.search).not.toHaveBeenCalled();
+  });
+  it("search rejects inverted date ranges before calling the backend", async () => {
+    const r = await ctx.client.callTool({ name: "search", arguments: {
+      account: "work", since: "2026-03-01", before: "2026-02-28",
+    } });
+    expect(r.isError).toBe(true);
+    expect(ctx.b.search).not.toHaveBeenCalled();
+  });
+  it.each([
+    {}, { since: "2024-02-29" }, { before: "2000-02-29" },
+    { since: "2024-02-29", before: "2024-03-01" },
+    { since: "2026-01-01", before: "2026-01-01" },
+  ])("search preserves valid date constraints %j", async (dates) => {
+    const r = await ctx.client.callTool({ name: "search", arguments: { account: "work", ...dates } });
+    expect(r.isError).not.toBe(true);
+    expect(ctx.b.search).toHaveBeenCalledWith(expect.anything(), "INBOX", expect.objectContaining(dates), 50);
+  });
   it("read_message caps body using MAX_BODY_CHARS", async () => {
     const m = parse(await ctx.client.callTool({ name: "read_message", arguments: { account: "work", uid: 7 } }));
     expect(m.body.length).toBe(50);
@@ -98,6 +124,30 @@ describe("tools", () => {
     await ctx.client.callTool({ name: "mark_unread", arguments: { account: "work", uids: [3] } });
     expect(ctx.b.setSeen).toHaveBeenNthCalledWith(1, expect.anything(), "INBOX", [1, 2], true);
     expect(ctx.b.setSeen).toHaveBeenNthCalledWith(2, expect.anything(), "INBOX", [3], false);
+  });
+  it.each(["mark_read", "mark_unread"])("%s accepts the maximum 500 UIDs", async (name) => {
+    const uids = Array.from({ length: 500 }, (_, i) => i + 1);
+    const r = await ctx.client.callTool({ name, arguments: { account: "work", folder: "INBOX", uids } });
+    expect(r.isError).not.toBe(true);
+    expect(ctx.b.setSeen).toHaveBeenCalledWith(expect.anything(), "INBOX", uids, name === "mark_read");
+  });
+  it("enforces the input element budget including nested unknown fields", async () => {
+    // Two top-level members, one nested member, and 1,021 array entries total 1,024.
+    const argumentsAtLimit = { account: "work", extra: { values: Array(1021).fill(0) } };
+    const accepted = await ctx.client.callTool({ name: "list_folders", arguments: argumentsAtLimit });
+    expect(accepted.isError).not.toBe(true);
+    expect(ctx.b.listFolders).toHaveBeenCalledTimes(1);
+    vi.mocked(ctx.b.listFolders).mockClear();
+
+    const rejected = await ctx.client.callTool({
+      name: "list_folders",
+      arguments: { account: "work", extra: { values: Array(1022).fill(0) } },
+    });
+    expect(rejected.isError).toBe(true);
+    expect(rejected.content).toEqual([
+      { type: "text", text: expect.stringContaining("arguments contain more than the maximum of 1024 elements") },
+    ]);
+    expect(ctx.b.listFolders).not.toHaveBeenCalled();
   });
   it("unknown account is an error", async () => {
     const r: any = await ctx.client.callTool({ name: "list_folders", arguments: { account: "nope" } });

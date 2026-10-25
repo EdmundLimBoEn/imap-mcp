@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { AppConfig } from "./config.js";
-import { buildRaw, type MailBackend } from "./backend.js";
+import { buildRaw, isValidSearchDate, validateSearchDates, type MailBackend } from "./backend.js";
 
 import { OperationLimits } from "./limits.js";
 
@@ -10,10 +10,11 @@ const fail = (msg: string) => ({ content: [{ type: "text" as const, text: msg }]
 const noCrlf = (s: string) => !/[\r\n]/.test(s);
 const header = z.string().refine(noCrlf, "CR/LF not allowed in headers");
 const address = z.string().email().refine(noCrlf, "CR/LF not allowed in addresses");
-const date = z.string().regex(/^\d{4}-\d{2}-\d{2}/, "YYYY-MM-DD");
+const date = z.string().refine(isValidSearchDate, "Calendar-valid YYYY-MM-DD required");
 
 export function buildServer(cfg: AppConfig, backend: MailBackend, limits = new OperationLimits(), caller?: AbortSignal): McpServer {
-  const server = new McpServer({ name: "imap-mcp", version: "0.2.0" });
+  // Allow the largest valid input (500 UIDs plus fields), while bounding validation work.
+  const server = new McpServer({ name: "imap-mcp", version: "0.2.0" }, { maxToolInputElements: 1024 });
   const acctSchema = z.string().describe("Account name from list_accounts");
   const get = (name: string) => {
     const a = cfg.accounts.get(name.toLowerCase());
@@ -76,14 +77,15 @@ export function buildServer(cfg: AppConfig, backend: MailBackend, limits = new O
         limit: z.number().int().min(1).max(200).default(50),
       },
     },
-    wrap(async (a: any) =>
-      backend.search(
+    wrap(async (a: any) => {
+      validateSearchDates(a);
+      return backend.search(
         get(a.account),
         a.folder,
         { from: a.from, subject: a.subject, text: a.text, since: a.since, before: a.before },
         a.limit,
-      ),
-    ),
+      );
+    }),
   );
 
   server.registerTool(
@@ -112,7 +114,8 @@ export function buildServer(cfg: AppConfig, backend: MailBackend, limits = new O
       },
       wrap(async (a: { account: string; folder: string; uids: number[] }) => {
         await backend.setSeen(get(a.account), a.folder, a.uids, seen);
-        return { updated: a.uids.length, seen };
+        // IMAP acknowledges the command but does not verify a changed-message count.
+        return { requested: a.uids.length, seen };
       }, true),
     );
   }
