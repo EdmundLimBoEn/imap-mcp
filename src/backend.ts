@@ -62,7 +62,25 @@ export interface MailBackend {
   appendSent(acct: AccountConfig, raw: Buffer): Promise<{ folder: string }>;
 }
 
+export function isValidSearchDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+export function validateSearchDates(q: SearchQuery): void {
+  for (const value of [q.since, q.before]) {
+    if (value !== undefined && !isValidSearchDate(value)) {
+      throw new Error("Search dates must be calendar-valid YYYY-MM-DD values");
+    }
+  }
+  if (q.since !== undefined && q.before !== undefined && q.since > q.before) {
+    throw new Error("since must be on or before before");
+  }
+}
+
 export function toSearchObject(q: SearchQuery): SearchObject {
+  validateSearchDates(q);
   const s: SearchObject = {};
   if (q.from) s.from = q.from;
   if (q.subject) s.subject = q.subject;
