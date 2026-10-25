@@ -21,6 +21,14 @@ export interface AppConfig {
 const bool = (v: string | undefined, d: boolean) =>
   v === undefined || v === "" ? d : ["1", "true", "yes", "on"].includes(v.toLowerCase());
 
+function boundedInteger(env: NodeJS.ProcessEnv, key: string, fallback: number, max: number): number {
+  const value = Number(env[key] || fallback);
+  if (!Number.isInteger(value) || value < 1 || value > max) {
+    throw new Error(`${key} must be an integer between 1 and ${max}`);
+  }
+  return value;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const bearerToken = env.MCP_BEARER_TOKEN ?? "";
   if (bearerToken.length < 16) {
@@ -42,7 +50,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     const acct: AccountConfig = {
       name,
       host: need("HOST"),
-      port: Number(env[p + "PORT"] || (tls ? 993 : 143)),
+      port: boundedInteger(env, p + "PORT", tls ? 993 : 143, 65535),
       user: need("USER"),
       pass: need("PASS"),
       tls,
@@ -51,15 +59,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     const smtpHost = env[p + "SMTP_HOST"];
     if (smtpHost) {
       const stls = bool(env[p + "SMTP_TLS"], true);
-      acct.smtp = { host: smtpHost, port: Number(env[p + "SMTP_PORT"] || 465), tls: stls };
+      acct.smtp = { host: smtpHost, port: boundedInteger(env, p + "SMTP_PORT", 465, 65535), tls: stls };
     }
     accounts.set(name, acct);
   }
   return {
     bearerToken,
-    port: Number(env.PORT || 8787),
+    port: boundedInteger(env, "PORT", 8787, 65535),
     host: env.HOST || "0.0.0.0",
-    maxBodyChars: Number(env.MAX_BODY_CHARS || 20000),
+    maxBodyChars: boundedInteger(env, "MAX_BODY_CHARS", 20000, 1_000_000),
     smtpEnabled: bool(env.SMTP_ENABLED, false),
     accounts,
   };

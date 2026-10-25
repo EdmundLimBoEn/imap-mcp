@@ -25,16 +25,16 @@ A small [MCP](https://modelcontextprotocol.io) server that bridges one or more I
 | `IMAP_<NAME>_HOST` | yes | | e.g. `imap.example.com` |
 | `IMAP_<NAME>_USER` | yes | | e.g. `user@example.com` |
 | `IMAP_<NAME>_PASS` | yes | | Use an app password |
-| `IMAP_<NAME>_PORT` | no | 993 (TLS) / 143 | |
+| `IMAP_<NAME>_PORT` | no | 993 (TLS) / 143 | Integer from 1 to 65535 |
 | `IMAP_<NAME>_TLS` | no | `true` | Implicit TLS |
 | `IMAP_<NAME>_SMTP_HOST` | for sending | | e.g. `smtp.example.com`. Reuses `IMAP_<NAME>_USER` / `_PASS` |
-| `IMAP_<NAME>_SMTP_PORT` | no | `465` | |
+| `IMAP_<NAME>_SMTP_PORT` | no | `465` | Integer from 1 to 65535 |
 | `IMAP_<NAME>_SMTP_TLS` | no | `true` | Implicit TLS; set `false` for plain/STARTTLS ports |
 | `IMAP_<NAME>_SENT` | no | auto | Sent folder override |
 | `SMTP_ENABLED` | no | `false` | Global gate; `send_message` exists only when `true` |
-| `PORT` | no | `8787` | |
+| `PORT` | no | `8787` | Integer from 1 to 65535 |
 | `HOST` | no | `0.0.0.0` | Listen address inside the container |
-| `MAX_BODY_CHARS` | no | `20000` | Body cap for `read_message` |
+| `MAX_BODY_CHARS` | no | `20000` | Body cap for `read_message`; integer from 1 to 1000000 |
 | `BIND_IP` | compose only | | Host IP to publish on (e.g. your Tailscale IP) |
 | `IMAP_TLS_INSECURE` | no | `false` | Skip TLS cert verification (testing only) |
 
