@@ -26,10 +26,10 @@ A small [MCP](https://modelcontextprotocol.io) server that bridges one or more I
 | `IMAP_<NAME>_USER` | yes | | e.g. `user@example.com` |
 | `IMAP_<NAME>_PASS` | yes | | Use an app password |
 | `IMAP_<NAME>_PORT` | no | 993 (TLS) / 143 | |
-| `IMAP_<NAME>_TLS` | no | `true` | Implicit TLS |
+| `IMAP_<NAME>_TLS` | no | `true` | Implicit TLS; `false` requires STARTTLS |
 | `IMAP_<NAME>_SMTP_HOST` | for sending | | e.g. `smtp.example.com`. Reuses `IMAP_<NAME>_USER` / `_PASS` |
 | `IMAP_<NAME>_SMTP_PORT` | no | `465` | |
-| `IMAP_<NAME>_SMTP_TLS` | no | `true` | Implicit TLS; set `false` for plain/STARTTLS ports |
+| `IMAP_<NAME>_SMTP_TLS` | no | `true` | Implicit TLS; `false` requires STARTTLS (set the SMTP port accordingly) |
 | `IMAP_<NAME>_SENT` | no | auto | Sent folder override |
 | `SMTP_ENABLED` | no | `false` | Global gate; `send_message` exists only when `true` |
 | `PORT` | no | `8787` | |
@@ -39,6 +39,12 @@ A small [MCP](https://modelcontextprotocol.io) server that bridges one or more I
 | `IMAP_TLS_INSECURE` | no | `false` | Skip TLS cert verification (testing only) |
 
 `<NAME>` is the account name upper-cased. See [`.env.example`](.env.example).
+
+`read_message` rejects messages larger than 1 MiB of raw MIME data, including attachments,
+before parsing. It checks the reported size before downloading and enforces the byte cap
+during download, independently of `MAX_BODY_CHARS`.
+
+Boolean settings accept `true/false`, `1/0`, `yes/no`, and `on/off` (case-insensitive). Unset or empty values use the default; other values are rejected.
 
 ## Run
 
@@ -82,6 +88,8 @@ Example client config:
 - Container runs as the non-root `node` user.
 
 ## Development
+
+The GreenMail smoke tests explicitly use `new ImapBackend({ allowPlaintextForTests: true })` for their plaintext server. This option is rejected unless `NODE_ENV=test`; normal connections always require TLS.
 
 ```bash
 npm ci
