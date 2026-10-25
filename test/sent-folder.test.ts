@@ -62,6 +62,17 @@ describe("Sent folder selection and recovery", () => {
     expect(client.mailboxCreate.mock.invocationCallOrder[0]).toBeLessThan(second);
   });
 
+  it.each([false, true])("rejects a false APPEND result without further retries (after creation=%s)", async (afterCreation) => {
+    if (afterCreation) client.append.mockRejectedValueOnce(missingFolder());
+    client.append.mockResolvedValueOnce(false);
+    await expect(backend.appendSent({ ...account, sentFolder: "Custom/Sent" }, raw))
+      .rejects.toThrow("IMAP APPEND failed");
+    expect(client.list).not.toHaveBeenCalled();
+    expect(client.append).toHaveBeenCalledTimes(afterCreation ? 2 : 1);
+    expect(client.mailboxCreate).toHaveBeenCalledTimes(afterCreation ? 1 : 0);
+    expect(client.logout).toHaveBeenCalledOnce();
+  });
+
   it.each([
     new Error("NO [TRYCREATE] mailbox missing"),
     Object.assign(new Error("Denied"), { responseStatus: "NO", serverResponseCode: "NOPERM" }),

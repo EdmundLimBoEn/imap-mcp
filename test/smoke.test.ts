@@ -35,8 +35,19 @@ describe.skipIf(!host)("smoke: GreenMail", () => {
       'Content-Type: multipart/mixed; boundary="b1"', "", "--b1", "Content-Type: text/plain", "", "body text here",
       "--b1", 'Content-Type: text/plain; name="note.txt"', 'Content-Disposition: attachment; filename="note.txt"', "", "hi", "--b1--", "",
     ].join("\r\n");
-    await seedClient.append("INBOX", raw, []);
-    await seedClient.logout();
+    try {
+      await seedClient.append("INBOX", raw, []);
+      await seedClient.mailboxOpen("INBOX", { readOnly: true });
+      const stored = await seedClient.fetchOne("*", { size: true, source: true });
+      // The download completeness check needs RFC822.SIZE to include headers,
+      // not just the body length returned by older GreenMail versions (#967).
+      expect(stored).toBeTruthy();
+      if (!stored) throw new Error("Seeded message missing");
+      expect(stored.source).toBeInstanceOf(Buffer);
+      expect(stored.size).toBe(stored.source!.length);
+    } finally {
+      await seedClient.logout();
+    }
     let list = [] as Awaited<ReturnType<typeof b.search>>;
     for (let i = 0; i < 20 && list.length === 0; i++) {
       list = await b.search(acct, "INBOX", { unreadOnly: true }, 10).catch(() => []);
