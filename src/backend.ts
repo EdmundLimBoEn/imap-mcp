@@ -3,6 +3,7 @@ import { simpleParser } from "mailparser";
 import { createTransport } from "nodemailer";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import type { AccountConfig } from "./config.js";
+import { parseBoolean } from "./config.js";
 
 export interface MessageSummary {
   uid: number;
@@ -100,14 +101,24 @@ export function toSearchObject(q: SearchQuery): SearchObject {
 }
 
 export class ImapBackend implements MailBackend {
+  private readonly allowPlaintextForTests: boolean;
+
+  constructor(options: { allowPlaintextForTests?: boolean } = {}) {
+    this.allowPlaintextForTests = options.allowPlaintextForTests === true;
+    if (this.allowPlaintextForTests && process.env.NODE_ENV !== "test") {
+      throw new Error("Plaintext mail connections are only allowed in tests");
+    }
+  }
+
   private async withClient<T>(acct: AccountConfig, fn: (c: ImapFlow) => Promise<T>): Promise<T> {
     const c = new ImapFlow({
       host: acct.host,
       port: acct.port,
       secure: acct.tls,
+      ...(!acct.tls ? { doSTARTTLS: !this.allowPlaintextForTests } : {}),
       auth: { user: acct.user, pass: acct.pass },
       logger: false,
-      tls: { rejectUnauthorized: process.env.IMAP_TLS_INSECURE !== "true" },
+      tls: { rejectUnauthorized: !parseBoolean(process.env.IMAP_TLS_INSECURE, false, "IMAP_TLS_INSECURE") },
     });
     let closed = false;
     const close = () => {
@@ -227,8 +238,9 @@ export class ImapBackend implements MailBackend {
       host: acct.smtp.host,
       port: acct.smtp.port,
       secure: acct.smtp.tls,
+      requireTLS: !acct.smtp.tls && !this.allowPlaintextForTests,
       auth: { user: acct.user, pass: acct.pass },
-      tls: { rejectUnauthorized: process.env.IMAP_TLS_INSECURE !== "true" },
+      tls: { rejectUnauthorized: !parseBoolean(process.env.IMAP_TLS_INSECURE, false, "IMAP_TLS_INSECURE") },
     });
     try {
       const info = await t.sendMail({ envelope, raw });

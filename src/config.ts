@@ -18,10 +18,15 @@ export interface AppConfig {
   accounts: Map<string, AccountConfig>;
 }
 
-const bool = (v: string | undefined, d: boolean) =>
-  v === undefined || v === "" ? d : ["1", "true", "yes", "on"].includes(v.toLowerCase());
+export function parseBoolean(v: string | undefined, d: boolean, name: string): boolean {
+  if (v === undefined || v === "") return d;
+  if (["1", "true", "yes", "on"].includes(v.toLowerCase())) return true;
+  if (["0", "false", "no", "off"].includes(v.toLowerCase())) return false;
+  throw new Error(`Invalid boolean setting: ${name}`);
+}
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  parseBoolean(env.IMAP_TLS_INSECURE, false, "IMAP_TLS_INSECURE");
   const bearerToken = env.MCP_BEARER_TOKEN ?? "";
   if (bearerToken.length < 16) {
     throw new Error("MCP_BEARER_TOKEN must be set (at least 16 characters); refusing to start");
@@ -38,7 +43,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       if (!v) throw new Error(`Missing env var ${p + k}`);
       return v;
     };
-    const tls = bool(env[p + "TLS"], true);
+    const tls = parseBoolean(env[p + "TLS"], true, p + "TLS");
     const acct: AccountConfig = {
       name,
       host: need("HOST"),
@@ -50,7 +55,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     };
     const smtpHost = env[p + "SMTP_HOST"];
     if (smtpHost) {
-      const stls = bool(env[p + "SMTP_TLS"], true);
+      const stls = parseBoolean(env[p + "SMTP_TLS"], true, p + "SMTP_TLS");
       acct.smtp = { host: smtpHost, port: Number(env[p + "SMTP_PORT"] || 465), tls: stls };
     }
     accounts.set(name, acct);
@@ -60,7 +65,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     port: Number(env.PORT || 8787),
     host: env.HOST || "0.0.0.0",
     maxBodyChars: Number(env.MAX_BODY_CHARS || 20000),
-    smtpEnabled: bool(env.SMTP_ENABLED, false),
+    smtpEnabled: parseBoolean(env.SMTP_ENABLED, false, "SMTP_ENABLED"),
     accounts,
   };
 }
