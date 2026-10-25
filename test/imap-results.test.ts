@@ -51,12 +51,12 @@ describe("IMAP command outcomes through MCP", () => {
     const result = await client.callTool({ name, arguments: { account: "work" } });
     expect(result).toMatchObject({
       isError: true,
-      content: [{ type: "text", text: "Error: IMAP operation failed" }],
+      content: [{ type: "text", text: "Error: IMAP search failed" }],
     });
     expect(imap.fetch).not.toHaveBeenCalled();
     expect(imap.release).toHaveBeenCalledOnce();
-    expect(imap.close).toHaveBeenCalledOnce();
-    expect(imap.logout).not.toHaveBeenCalled();
+    expect(imap.close).not.toHaveBeenCalled();
+    expect(imap.logout).toHaveBeenCalledOnce();
   });
 
   it.each(["search", "list_messages"])("%s preserves a successful empty search", async (name) => {
@@ -92,11 +92,11 @@ describe("IMAP command outcomes through MCP", () => {
     const refused = await client.callTool({ name, arguments: args });
     expect(refused).toMatchObject({
       isError: true,
-      content: [{ type: "text", text: "Error: IMAP operation failed" }],
+      content: [{ type: "text", text: "Error: IMAP flag update failed" }],
     });
     expect(imap.release).toHaveBeenCalledOnce();
-    expect(imap.close).toHaveBeenCalledOnce();
-    expect(imap.logout).not.toHaveBeenCalled();
+    expect(imap.close).not.toHaveBeenCalled();
+    expect(imap.logout).toHaveBeenCalledOnce();
 
     // STORE can succeed for duplicate, nonexistent, or already-set UIDs;
     // a true result does not establish how many messages changed.
@@ -108,6 +108,6 @@ describe("IMAP command outcomes through MCP", () => {
     }]);
     expect(imap[method]).toHaveBeenLastCalledWith(args.uids, ["\\Seen"], { uid: true });
     expect(imap.release).toHaveBeenCalledTimes(2);
-    expect(imap.logout).toHaveBeenCalledOnce();
+    expect(imap.logout).toHaveBeenCalledTimes(2);
   });
 });
