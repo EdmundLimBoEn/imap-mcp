@@ -3,6 +3,8 @@ import { z } from "zod";
 import type { AppConfig } from "./config.js";
 import { buildRaw, type MailBackend } from "./backend.js";
 
+import { OperationLimits } from "./limits.js";
+
 const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] });
 const fail = (msg: string) => ({ content: [{ type: "text" as const, text: msg }], isError: true });
 const noCrlf = (s: string) => !/[\r\n]/.test(s);
@@ -10,7 +12,7 @@ const header = z.string().refine(noCrlf, "CR/LF not allowed in headers");
 const address = z.string().email().refine(noCrlf, "CR/LF not allowed in addresses");
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}/, "YYYY-MM-DD");
 
-export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
+export function buildServer(cfg: AppConfig, backend: MailBackend, limits = new OperationLimits(), caller?: AbortSignal): McpServer {
   const server = new McpServer({ name: "imap-mcp", version: "0.2.0" });
   const acctSchema = z.string().describe("Account name from list_accounts");
   const get = (name: string) => {
@@ -19,10 +21,13 @@ export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
     return a;
   };
   const wrap =
-    <A,>(fn: (args: A) => Promise<unknown>) =>
+    <A,>(fn: (args: A) => Promise<unknown>, mutation = false, send = false) =>
     async (args: A) => {
       try {
-        return ok(await fn(args));
+        const name = (args as { account?: string }).account;
+        const account = name ? get(name).name.toLowerCase() : "";
+        if (send) limits.quota("sends");
+        return ok(await limits.run(account, mutation ? undefined : caller, () => fn(args)));
       } catch (e) {
         return fail(`Error: ${(e as Error).message}`);
       }
@@ -108,7 +113,7 @@ export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
       wrap(async (a: { account: string; folder: string; uids: number[] }) => {
         await backend.setSeen(get(a.account), a.folder, a.uids, seen);
         return { updated: a.uids.length, seen };
-      }),
+      }, true),
     );
   }
 
@@ -139,7 +144,7 @@ export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
           sentCopy = { saved: false, error: (e as Error).message };
         }
         return { sent: true, messageId: sent.messageId, sentCopy };
-      }),
+      }, true, true),
     );
   }
   return server;

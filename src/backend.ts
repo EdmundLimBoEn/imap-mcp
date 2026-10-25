@@ -1,3 +1,5 @@
+import { connect, type Socket } from "node:net";
+import { abortable, operationContext, DEFAULT_LIMITS } from "./limits.js";
 import { ImapFlow, type SearchObject } from "imapflow";
 import { simpleParser } from "mailparser";
 import { createTransport } from "nodemailer";
@@ -76,6 +78,8 @@ export function toSearchObject(q: SearchQuery): SearchObject {
 
 export class ImapBackend implements MailBackend {
   private async withClient<T>(acct: AccountConfig, fn: (c: ImapFlow) => Promise<T>): Promise<T> {
+    const signal = operationContext.getStore() ?? AbortSignal.timeout(DEFAULT_LIMITS.deadlineMs);
+    signal.throwIfAborted();
     const c = new ImapFlow({
       host: acct.host,
       port: acct.port,
@@ -84,11 +88,19 @@ export class ImapBackend implements MailBackend {
       logger: false,
       tls: { rejectUnauthorized: process.env.IMAP_TLS_INSECURE !== "true" },
     });
-    await c.connect();
+    const cancel = () => c.close();
+    signal.addEventListener("abort", cancel, { once: true });
     try {
+      await abortable(c.connect(), signal);
+      signal.throwIfAborted();
       return await fn(c);
     } finally {
-      await c.logout().catch(() => c.close());
+      try {
+        if (!signal.aborted) await abortable(c.logout(), signal).catch(() => c.close());
+      } finally {
+        c.close();
+        signal.removeEventListener("abort", cancel);
+      }
     }
   }
 
@@ -171,7 +183,24 @@ export class ImapBackend implements MailBackend {
 
   async smtpSend(acct: AccountConfig, envelope: { from: string; to: string[] }, raw: Buffer) {
     if (!acct.smtp) throw new Error(`SMTP not configured for ${acct.name}`);
+    const signal = operationContext.getStore() ?? AbortSignal.timeout(DEFAULT_LIMITS.deadlineMs);
+    signal.throwIfAborted();
+    let socket: Socket | undefined;
+    const cancel = () => socket?.destroy();
+    signal.addEventListener("abort", cancel, { once: true });
     const t = createTransport({
+      // Own the underlying socket: transport.close() alone does not stop active SMTP.
+      getSocket: (_options, callback) => {
+        if (signal.aborted) return callback(new Error("operation cancelled"));
+        socket = connect({ host: acct.smtp!.host, port: acct.smtp!.port });
+        const error = (err: Error) => callback(err);
+        socket.once("error", error);
+        socket.once("connect", () => {
+          socket!.removeListener("error", error);
+          if (signal.aborted) { socket!.destroy(); return; }
+          callback(null, { connection: socket! });
+        });
+      },
       host: acct.smtp.host,
       port: acct.smtp.port,
       secure: acct.smtp.tls,
@@ -179,10 +208,12 @@ export class ImapBackend implements MailBackend {
       tls: { rejectUnauthorized: process.env.IMAP_TLS_INSECURE !== "true" },
     });
     try {
-      const info = await t.sendMail({ envelope, raw });
+      const info = await abortable(t.sendMail({ envelope, raw }), signal);
       return { messageId: info.messageId };
     } finally {
+      socket?.destroy();
       t.close();
+      signal.removeEventListener("abort", cancel);
     }
   }
 
