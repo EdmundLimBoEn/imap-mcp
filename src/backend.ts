@@ -277,7 +277,10 @@ export class ImapBackend implements MailBackend {
           content.destroy();
         }
         // Only complete, byte-bounded input reaches the buffering MIME parser.
-        const p = await simpleParser(Buffer.concat(chunks, bytes));
+        const p = await simpleParser(Buffer.concat(chunks, bytes), {
+          skipTextToHtml: true,
+          skipImageLinks: true,
+        });
         const text = p.text ?? "";
         const addr = (a: any) => (a ? (Array.isArray(a) ? a.map((x) => x.text).join(", ") : a.text) : undefined);
         return {

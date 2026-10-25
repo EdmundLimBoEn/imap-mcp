@@ -65,6 +65,41 @@ describe("bounded message reads", () => {
     expect(client.logout).toHaveBeenCalledOnce();
   });
 
+  it("does not generate discarded HTML from plain text", async () => {
+    expect(await read()).toMatchObject({ body: "A body longer than t", truncated: true });
+    const parsed = await vi.mocked(simpleParser).mock.results[0].value;
+    expect(parsed.text).toContain("A body longer than twenty characters.");
+    expect(parsed.textAsHtml).toBe("");
+  });
+
+  it("preserves HTML-to-text conversion for HTML-only mail", async () => {
+    const source = Buffer.from("Content-Type: text/html; charset=utf-8\r\n\r\n<p>Hello <b>world</b></p>");
+    client.fetchOne.mockResolvedValue({ uid: 7, size: source.length, flags: new Set() });
+    client.download.mockResolvedValue({ content: Readable.from([source]) });
+    expect(await read()).toMatchObject({ body: "Hello world", truncated: false, attachments: [] });
+  });
+
+  it("does not embed inline images in discarded HTML", async () => {
+    const source = Buffer.from([
+      "Subject: HTML message", 'Content-Type: multipart/related; boundary="related"', "",
+      "--related", "Content-Type: text/html; charset=utf-8", "",
+      '<p>Hello <b>world</b></p><img src="cid:photo">',
+      "--related", "Content-Type: image/png", "Content-ID: <photo>",
+      'Content-Disposition: inline; filename="photo.png"', "Content-Transfer-Encoding: base64",
+      "", "aGVsbG8=", "--related--", "",
+    ].join("\r\n"));
+    client.fetchOne.mockResolvedValue({ uid: 7, size: source.length, flags: new Set() });
+    client.download.mockResolvedValue({ content: Readable.from([source]) });
+
+    expect(await read()).toMatchObject({
+      subject: "HTML message",
+      attachments: [{ filename: "photo.png", contentType: "image/png", size: 5 }],
+    });
+    const parsed = await vi.mocked(simpleParser).mock.results[0].value;
+    expect(parsed.html).toContain('src="cid:photo"');
+    expect(parsed.html).not.toContain("data:image/png");
+  });
+
   it.each([MAX_MESSAGE_BYTES + 1, 2_000_000])("rejects advertised size %s without downloading or parsing", async (size) => {
     client.fetchOne.mockResolvedValue({ uid: 7, size, source: raw });
     await expect(read()).rejects.toThrow("1 MiB read limit");
