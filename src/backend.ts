@@ -227,10 +227,13 @@ export class ImapBackend implements MailBackend {
         if (!uids) throw new MailOperationError("IMAP search failed");
         const pick = selectNewestUids(uids, limit);
         if (pick.length === 0) return [];
-        const out: MessageSummary[] = [];
+        const selected = new Set(pick);
+        const out = new Map<number, MessageSummary>();
         for await (const m of c.fetch(pick, { uid: true, envelope: true, flags: true }, { uid: true })) {
+          // FETCH can also yield unsolicited or flag-only updates.
+          if (!selected.has(m.uid) || !m.envelope) continue;
           const f = m.envelope?.from?.[0];
-          out.push({
+          out.set(m.uid, {
             uid: m.uid,
             uidValidity,
             date: m.envelope?.date ? new Date(m.envelope.date).toISOString() : undefined,
@@ -239,7 +242,7 @@ export class ImapBackend implements MailBackend {
             seen: m.flags?.has("\\Seen") ?? false,
           });
         }
-        return out.sort((a, b) => b.uid - a.uid);
+        return [...out.values()].sort((a, b) => b.uid - a.uid);
       } finally {
         lock.release();
       }
