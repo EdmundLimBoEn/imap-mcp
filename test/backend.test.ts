@@ -106,6 +106,30 @@ describe("bounded message reads", () => {
     expect(vi.mocked(simpleParser).mock.calls[0][0]).toEqual(source);
   });
 
+  it.each([
+    { advertised: 90_000, delivered: 65_536 },
+    { advertised: raw.length, delivered: 0 },
+    { advertised: raw.length - 1, delivered: raw.length },
+  ])("rejects a clean EOF with $delivered bytes advertised as $advertised", async ({ advertised, delivered }) => {
+    const source = Buffer.concat([raw, Buffer.alloc(delivered)]).subarray(0, delivered);
+    const content = Readable.from([source.subarray(0, 100), source.subarray(100)]);
+    client.fetchOne.mockResolvedValue({ uid: 7, size: advertised });
+    client.download.mockResolvedValue({ content });
+    await expect(read()).rejects.toEqual(new Error("Incomplete message download: size mismatch"));
+    expect(simpleParser).not.toHaveBeenCalled();
+    expect(content.destroyed).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
+    expect(client.logout).toHaveBeenCalledOnce();
+  });
+
+  it("accepts a complete UTF-8 message across download chunks", async () => {
+    const source = Buffer.from("Subject: complete\r\nContent-Type: text/plain; charset=utf-8\r\n\r\ncafé");
+    client.fetchOne.mockResolvedValue({ uid: 7, size: source.length });
+    client.download.mockResolvedValue({ content: Readable.from([source.subarray(0, -1), source.subarray(-1)]) });
+    expect(await read()).toMatchObject({ subject: "complete", body: "café", truncated: false });
+    expect(vi.mocked(simpleParser).mock.calls[0][0]).toEqual(source);
+  });
+
   it("does not parse a partial message when the download fails", async () => {
     const content = Readable.from((async function* () {
       yield raw;
