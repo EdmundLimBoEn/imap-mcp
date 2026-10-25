@@ -93,3 +93,5 @@ GREENMAIL_HOST=localhost npm test   # adds the end-to-end smoke test
 ```
 
 CI runs both and publishes `ghcr.io/edmundlimboen/imap-mcp:latest` (and `:<sha>`) on pushes to `main`, and `:X.Y.Z` for `vX.Y.Z` tags.
+
+SMTP results include `status` (`submitted`, `partial_submission`, or `rejected`), `accepted`, `rejected`, and `rejectionDetails` with recipient addresses and numeric SMTP rejection codes when available. `sent` is true only when all recipients were accepted for submission; this does not confirm delivery. A partial submission still saves a Sent copy. `retryable` lists only recipients with temporary (4xx) rejections; retry those later, never the accepted recipients. Permanent (5xx) or unknown rejections require review. Raw SMTP rejection text is omitted.
