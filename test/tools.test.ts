@@ -13,7 +13,7 @@ const mock = (): MailBackend => ({
     attachments: [{ filename: "a.pdf", contentType: "application/pdf", size: 10 }],
   })),
   setSeen: vi.fn(async () => {}),
-  smtpSend: vi.fn(async () => ({ messageId: "<m1@example.com>" })),
+  smtpSend: vi.fn(async (_a, envelope) => ({ messageId: "<m1@example.com>", accepted: envelope.to, rejected: [], rejectionDetails: [] })),
   appendSent: vi.fn(async () => ({ folder: "Sent" })),
 });
 
@@ -43,13 +43,46 @@ describe("tools", () => {
     const { client, b } = await connect(cfg({ SMTP_ENABLED: "true" }));
     const r = parse(await client.callTool({ name: "send_message", arguments: {
       account: "work", to: ["a@example.com"], cc: ["c@example.com"], subject: "Re: hi", body: "yo", in_reply_to: "<orig@example.com>" } }));
-    expect(r).toMatchObject({ sent: true, messageId: "<m1@example.com>", sentCopy: { saved: true, folder: "Sent" } });
+    expect(r).toMatchObject({ status: "submitted", accepted: ["a@example.com", "c@example.com"], rejected: [], retryable: [], sent: true, messageId: "<m1@example.com>", sentCopy: { saved: true, folder: "Sent" } });
     const [, env, raw] = (b.smtpSend as any).mock.calls[0];
     expect(env).toEqual({ from: "work@example.com", to: ["a@example.com", "c@example.com"] });
     const text = raw.toString();
     expect(text).toMatch(/^In-Reply-To: <orig@example.com>$/m);
     expect(text).toMatch(/^References: <orig@example.com>$/m);
     expect((b.appendSent as any).mock.calls[0][1]).toBe(raw);
+  });
+  it.each([false, true])("reports partial submission even when Sent copying fails: %s", async (copyFails) => {
+    const { client, b } = await connect(cfg({ SMTP_ENABLED: "true" }));
+    const outcomes = {
+      messageId: "<partial@example.com>", accepted: ["a@example.com"],
+      rejected: ["temp@example.com", "gone@example.com", "unknown@example.com"],
+      rejectionDetails: [
+        { recipient: "temp@example.com", responseCode: 450 },
+        { recipient: "gone@example.com", responseCode: 550 },
+        { recipient: "unknown@example.com" },
+      ],
+    };
+    vi.mocked(b.smtpSend).mockResolvedValue(outcomes);
+    if (copyFails) vi.mocked(b.appendSent).mockRejectedValue(new Error("copy failed"));
+    const result = await client.callTool({ name: "send_message", arguments: {
+      account: "work", to: ["a@example.com"], cc: outcomes.rejected, subject: "s", body: "b",
+    } });
+    expect(result.isError).not.toBe(true);
+    expect(parse(result)).toEqual({
+      ...outcomes, sent: false, status: "partial_submission", retryable: ["temp@example.com"],
+      sentCopy: copyFails ? { saved: false, error: "copy failed" } : { saved: true, folder: "Sent" },
+    });
+    expect(b.smtpSend).toHaveBeenCalledTimes(1);
+    expect(b.appendSent).toHaveBeenCalledTimes(1);
+  });
+  it("does not save a Sent copy when SMTP rejects the submission", async () => {
+    const { client, b } = await connect(cfg({ SMTP_ENABLED: "true" }));
+    vi.mocked(b.smtpSend).mockRejectedValue(new Error("All recipients rejected"));
+    const result = await client.callTool({ name: "send_message", arguments: {
+      account: "work", to: ["a@example.com"], subject: "s", body: "b",
+    } });
+    expect(result.isError).toBe(true);
+    expect(b.appendSent).not.toHaveBeenCalled();
   });
   it("send_message rejects header injection and bad addresses", async () => {
     const { client, b } = await connect(cfg({ SMTP_ENABLED: "true" }));

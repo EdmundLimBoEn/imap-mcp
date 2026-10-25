@@ -15,7 +15,9 @@ vi.mock("imapflow", () => ({
 }));
 vi.mock("nodemailer", () => ({
   createTransport: vi.fn(() => ({
-    sendMail: vi.fn().mockResolvedValue({ messageId: "test" }),
+    sendMail: vi.fn().mockResolvedValue({
+      messageId: "test", accepted: ["recipient@example.test"], rejected: [],
+    }),
     close: vi.fn(),
   })),
 }));

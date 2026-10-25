@@ -36,6 +36,13 @@ export interface OutgoingMessage {
   inReplyTo?: string;
 }
 
+export interface SmtpSubmission {
+  messageId?: string;
+  accepted: string[];
+  rejected: string[];
+  rejectionDetails: { recipient: string; responseCode?: number }[];
+}
+
 export function buildRaw(m: OutgoingMessage): Promise<Buffer> {
   return new MailComposer({
     from: m.from,
@@ -65,7 +72,7 @@ export interface MailBackend {
   read(acct: AccountConfig, folder: string, uid: number, uidValidity: string, maxChars: number): Promise<FullMessage | null>;
   setSeen(acct: AccountConfig, folder: string, uids: number[], uidValidity: string, seen: boolean): Promise<void>;
   /** SMTP submit of a pre-built RFC 822 message. */
-  smtpSend(acct: AccountConfig, envelope: { from: string; to: string[] }, raw: Buffer): Promise<{ messageId?: string }>;
+  smtpSend(acct: AccountConfig, envelope: { from: string; to: string[] }, raw: Buffer): Promise<SmtpSubmission>;
   /** IMAP APPEND a copy to the Sent folder. */
   appendSent(acct: AccountConfig, raw: Buffer): Promise<{ folder: string }>;
 }
@@ -324,7 +331,24 @@ export class ImapBackend implements MailBackend {
     });
     try {
       const info = await t.sendMail({ envelope, raw });
-      return { messageId: info.messageId };
+      const accepted = info.accepted.map((a: string | { address: string }) => typeof a === "string" ? a : a.address);
+      const rejected = info.rejected.map((a: string | { address: string }) => typeof a === "string" ? a : a.address);
+      // Nodemailer supplies rejectedErrors at runtime, but its transport types omit it.
+      const errors = (info as typeof info & {
+        rejectedErrors?: { recipient?: string; responseCode?: number }[];
+      }).rejectedErrors ?? [];
+      return {
+        messageId: info.messageId,
+        accepted,
+        rejected,
+        rejectionDetails: rejected.map((recipient) => {
+          const code = errors.find((e) => e.recipient === recipient)?.responseCode;
+          // Never expose raw server responses, error messages, or arbitrary error fields.
+          const responseCode = typeof code === "number" && Number.isInteger(code) && code >= 400 && code <= 599
+            ? code : undefined;
+          return { recipient, ...(responseCode !== undefined ? { responseCode } : {}) };
+        }),
+      };
     } finally {
       t.close();
     }

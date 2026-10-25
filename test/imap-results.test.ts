@@ -108,6 +108,7 @@ describe("IMAP command outcomes through MCP", () => {
     }]);
     expect(imap[method]).toHaveBeenLastCalledWith(args.uids, ["\\Seen"], { uid: true });
     expect(imap.release).toHaveBeenCalledTimes(2);
+    expect(imap.close).not.toHaveBeenCalled();
     expect(imap.logout).toHaveBeenCalledTimes(2);
   });
 });

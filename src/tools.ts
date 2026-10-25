@@ -124,7 +124,7 @@ export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
     server.registerTool(
       "send_message",
       {
-        description: "Send a plain-text email over SMTP and save a copy to the Sent folder.",
+        description: "Submit a plain-text email over SMTP and save a copy to Sent. Check status and recipient outcomes; retry only retryable recipients after temporary failures, never accepted recipients.",
         inputSchema: {
           account: acctSchema,
           to: z.array(address).min(1).max(50),
@@ -139,13 +139,20 @@ export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
         if (!acct.smtp) throw new Error(`SMTP not configured for ${acct.name} (set IMAP_${acct.name.toUpperCase()}_SMTP_HOST)`);
         const raw = await buildRaw({ from: acct.user, to: a.to, cc: a.cc, subject: a.subject, body: a.body, inReplyTo: a.in_reply_to });
         const sent = await backend.smtpSend(acct, { from: acct.user, to: [...a.to, ...(a.cc ?? [])] }, raw);
-        let sentCopy: { saved: boolean; folder?: string; error?: string };
-        try {
-          sentCopy = { saved: true, ...(await backend.appendSent(acct, raw)) };
-        } catch (e) {
-          sentCopy = { saved: false, error: (e as Error).message };
+        const status = sent.accepted.length === 0 ? "rejected"
+          : sent.rejected.length > 0 ? "partial_submission" : "submitted";
+        const retryable = sent.rejectionDetails
+          .filter((d) => d.responseCode !== undefined && d.responseCode >= 400 && d.responseCode < 500)
+          .map((d) => d.recipient);
+        let sentCopy: { saved: boolean; folder?: string; error?: string } = { saved: false };
+        if (sent.accepted.length > 0) {
+          try {
+            sentCopy = { saved: true, ...(await backend.appendSent(acct, raw)) };
+          } catch (e) {
+            sentCopy = { saved: false, error: (e as Error).message };
+          }
         }
-        return { sent: true, messageId: sent.messageId, sentCopy };
+        return { ...sent, sent: status === "submitted", status, retryable, sentCopy };
       }),
     );
   }
