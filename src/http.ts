@@ -19,15 +19,28 @@ const json = (res: ServerResponse, code: number, body: unknown) => {
   res.writeHead(code, { "content-type": "application/json" }).end(JSON.stringify(body));
 };
 
+class BodyError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+  }
+}
+
 async function readBody(req: IncomingMessage, max = 1_000_000): Promise<unknown> {
   const chunks: Buffer[] = [];
   let n = 0;
-  for await (const c of req) {
+  for await (const c of req.iterator({ destroyOnReturn: false })) {
     n += (c as Buffer).length;
-    if (n > max) throw new Error("body too large");
+    if (n > max) {
+      req.resume();
+      throw new BodyError(413, "body too large");
+    }
     chunks.push(c as Buffer);
   }
-  return n ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : undefined;
+  try {
+    return n ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : undefined;
+  } catch {
+    throw new BodyError(400, "invalid JSON");
+  }
 }
 
 export function createApp(cfg: AppConfig, backend: MailBackend): Server {
@@ -51,7 +64,11 @@ export function createApp(cfg: AppConfig, backend: MailBackend): Server {
       await server.connect(transport);
       await transport.handleRequest(req, res, body);
     } catch (e) {
-      if (!res.headersSent) json(res, 400, { error: (e as Error).message });
+      if (!res.headersSent) {
+        json(res, e instanceof BodyError ? e.status : 500, {
+          error: e instanceof BodyError ? e.message : "internal server error",
+        });
+      }
     }
   });
 }
