@@ -366,10 +366,18 @@ export class ImapBackend implements MailBackend {
 
   appendSent(acct: AccountConfig, raw: Buffer) {
     return this.withClient(acct, async (c) => {
-      const list = await c.list();
-      const folder = acct.sentFolder ?? list.find((m) => m.specialUse === "\\Sent")?.path ?? "Sent";
-      if (!list.some((m) => m.path === folder)) await c.mailboxCreate(folder);
-      const result = await c.append(folder, raw, ["\\Seen"]);
+      const folder = acct.sentFolder ?? (await c.list()).find((m) => m.specialUse === "\\Sent")?.path ?? "Sent";
+      let result;
+      try {
+        result = await c.append(folder, raw, ["\\Seen"]);
+      } catch (error) {
+        // Only a confirmed missing mailbox makes creation and an APPEND retry safe.
+        if (typeof error !== "object" || error === null ||
+            !("responseStatus" in error) || error.responseStatus !== "NO" ||
+            !("serverResponseCode" in error) || error.serverResponseCode !== "TRYCREATE") throw error;
+        await c.mailboxCreate(folder);
+        result = await c.append(folder, raw, ["\\Seen"]);
+      }
       if (!result) throw new MailOperationError("IMAP APPEND failed");
       return { folder };
     });
