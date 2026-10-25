@@ -3,6 +3,7 @@ import { simpleParser } from "mailparser";
 import { createTransport } from "nodemailer";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import type { AccountConfig } from "./config.js";
+import { parseBoolean } from "./config.js";
 
 export interface MessageSummary {
   uid: number;
@@ -63,7 +64,25 @@ export interface MailBackend {
   appendSent(acct: AccountConfig, raw: Buffer): Promise<{ folder: string }>;
 }
 
+export function isValidSearchDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+export function validateSearchDates(q: SearchQuery): void {
+  for (const value of [q.since, q.before]) {
+    if (value !== undefined && !isValidSearchDate(value)) {
+      throw new Error("Search dates must be calendar-valid YYYY-MM-DD values");
+    }
+  }
+  if (q.since !== undefined && q.before !== undefined && q.since > q.before) {
+    throw new Error("since must be on or before before");
+  }
+}
+
 export function toSearchObject(q: SearchQuery): SearchObject {
+  validateSearchDates(q);
   const s: SearchObject = {};
   if (q.from) s.from = q.from;
   if (q.subject) s.subject = q.subject;
@@ -94,14 +113,24 @@ function requireUidValidity(c: ImapFlow, expected: string): void {
 }
 
 export class ImapBackend implements MailBackend {
+  private readonly allowPlaintextForTests: boolean;
+
+  constructor(options: { allowPlaintextForTests?: boolean } = {}) {
+    this.allowPlaintextForTests = options.allowPlaintextForTests === true;
+    if (this.allowPlaintextForTests && process.env.NODE_ENV !== "test") {
+      throw new Error("Plaintext mail connections are only allowed in tests");
+    }
+  }
+
   private async withClient<T>(acct: AccountConfig, fn: (c: ImapFlow) => Promise<T>): Promise<T> {
     const c = new ImapFlow({
       host: acct.host,
       port: acct.port,
       secure: acct.tls,
+      ...(!acct.tls ? { doSTARTTLS: !this.allowPlaintextForTests } : {}),
       auth: { user: acct.user, pass: acct.pass },
       logger: false,
-      tls: { rejectUnauthorized: process.env.IMAP_TLS_INSECURE !== "true" },
+      tls: { rejectUnauthorized: !parseBoolean(process.env.IMAP_TLS_INSECURE, false, "IMAP_TLS_INSECURE") },
     });
     let closed = false;
     const close = () => {
@@ -153,7 +182,8 @@ export class ImapBackend implements MailBackend {
       const lock = await c.getMailboxLock(folder, { readOnly: true });
       try {
         const uidValidity = mailboxUidValidity(c);
-        const uids = (await c.search(toSearchObject(q), { uid: true })) || [];
+        const uids = await c.search(toSearchObject(q), { uid: true });
+        if (!uids) throw new Error("IMAP search failed");
         const pick = uids.sort((a, b) => b - a).slice(0, limit);
         if (pick.length === 0) return [];
         const out: MessageSummary[] = [];
@@ -215,8 +245,10 @@ export class ImapBackend implements MailBackend {
       const lock = await c.getMailboxLock(folder);
       try {
         requireUidValidity(c, uidValidity);
-        if (seen) await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true });
-        else await c.messageFlagsRemove(uids, ["\\Seen"], { uid: true });
+        const success = seen
+          ? await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true })
+          : await c.messageFlagsRemove(uids, ["\\Seen"], { uid: true });
+        if (!success) throw new Error("IMAP flag update failed");
       } finally {
         lock.release();
       }
@@ -230,8 +262,9 @@ export class ImapBackend implements MailBackend {
       host: acct.smtp.host,
       port: acct.smtp.port,
       secure: acct.smtp.tls,
+      requireTLS: !acct.smtp.tls && !this.allowPlaintextForTests,
       auth: { user: acct.user, pass: acct.pass },
-      tls: { rejectUnauthorized: process.env.IMAP_TLS_INSECURE !== "true" },
+      tls: { rejectUnauthorized: !parseBoolean(process.env.IMAP_TLS_INSECURE, false, "IMAP_TLS_INSECURE") },
     });
     try {
       const info = await t.sendMail({ envelope, raw });
