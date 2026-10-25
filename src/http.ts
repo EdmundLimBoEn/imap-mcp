@@ -19,15 +19,26 @@ const json = (res: ServerResponse, code: number, body: unknown) => {
   res.writeHead(code, { "content-type": "application/json" }).end(JSON.stringify(body));
 };
 
+class RequestBodyError extends Error {
+  constructor(readonly status: number, readonly code: string) {
+    super(code);
+  }
+}
+
 async function readBody(req: IncomingMessage, max = 1_000_000): Promise<unknown> {
   const chunks: Buffer[] = [];
   let n = 0;
-  for await (const c of req) {
+  // Keep the socket open so an oversized request can receive its 413 response.
+  for await (const c of req.iterator({ destroyOnReturn: false })) {
     n += (c as Buffer).length;
-    if (n > max) throw new Error("body too large");
+    if (n > max) throw new RequestBodyError(413, "payload_too_large");
     chunks.push(c as Buffer);
   }
-  return n ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : undefined;
+  try {
+    return n ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : undefined;
+  } catch {
+    throw new RequestBodyError(400, "invalid_json");
+  }
 }
 
 export function createApp(cfg: AppConfig, backend: MailBackend): Server {
@@ -51,7 +62,10 @@ export function createApp(cfg: AppConfig, backend: MailBackend): Server {
       await server.connect(transport);
       await transport.handleRequest(req, res, body);
     } catch (e) {
-      if (!res.headersSent) json(res, 400, { error: (e as Error).message });
+      if (!res.headersSent) {
+        if (e instanceof RequestBodyError) json(res, e.status, { error: e.code });
+        else json(res, 500, { error: "internal_error" });
+      }
     }
   });
 }

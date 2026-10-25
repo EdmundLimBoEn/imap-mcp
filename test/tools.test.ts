@@ -66,6 +66,14 @@ describe("tools", () => {
     }
     expect(b.smtpSend).not.toHaveBeenCalled();
   });
+  it("sanitizes Sent-copy failures while preserving successful submission", async () => {
+    const { client, b } = await connect(cfg({ SMTP_ENABLED: "true" }));
+    vi.mocked(b.appendSent).mockRejectedValueOnce(new Error("synthetic private IMAP detail"));
+    const r = parse(await client.callTool({ name: "send_message", arguments: {
+      account: "work", to: ["a@example.com"], subject: "s", body: "b",
+    } }));
+    expect(r).toEqual({ sent: true, messageId: "<m1@example.com>", sentCopy: { saved: false, error: "sent_copy_failed" } });
+  });
   it("send_message errors when account has no SMTP host", async () => {
     const { client, b } = await connect(cfg({ SMTP_ENABLED: "true" }));
     const r: any = await client.callTool({ name: "send_message", arguments: { account: "personal", to: ["a@example.com"], subject: "s", body: "b" } });

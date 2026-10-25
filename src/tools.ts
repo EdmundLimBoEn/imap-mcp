@@ -23,8 +23,8 @@ export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
     async (args: A) => {
       try {
         return ok(await fn(args));
-      } catch (e) {
-        return fail(`Error: ${(e as Error).message}`);
+      } catch {
+        return fail("backend_error");
       }
     };
 
@@ -135,8 +135,8 @@ export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
         let sentCopy: { saved: boolean; folder?: string; error?: string };
         try {
           sentCopy = { saved: true, ...(await backend.appendSent(acct, raw)) };
-        } catch (e) {
-          sentCopy = { saved: false, error: (e as Error).message };
+        } catch {
+          sentCopy = { saved: false, error: "sent_copy_failed" };
         }
         return { sent: true, messageId: sent.messageId, sentCopy };
       }),
