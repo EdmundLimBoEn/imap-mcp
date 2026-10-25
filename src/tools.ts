@@ -11,7 +11,8 @@ const address = z.string().email().refine(noCrlf, "CR/LF not allowed in addresse
 const date = z.string().refine(isValidSearchDate, "Calendar-valid YYYY-MM-DD required");
 
 export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
-  const server = new McpServer({ name: "imap-mcp", version: "0.2.0" });
+  // Allow the largest valid input (500 UIDs plus fields), while bounding validation work.
+  const server = new McpServer({ name: "imap-mcp", version: "0.2.0" }, { maxToolInputElements: 1024 });
   const acctSchema = z.string().describe("Account name from list_accounts");
   const get = (name: string) => {
     const a = cfg.accounts.get(name.toLowerCase());
