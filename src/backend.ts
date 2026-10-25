@@ -6,6 +6,7 @@ import type { AccountConfig } from "./config.js";
 
 export interface MessageSummary {
   uid: number;
+  uidValidity: string;
   date?: string;
   from?: string;
   subject?: string;
@@ -54,8 +55,8 @@ export interface SearchQuery {
 export interface MailBackend {
   listFolders(acct: AccountConfig): Promise<{ path: string; specialUse?: string }[]>;
   search(acct: AccountConfig, folder: string, q: SearchQuery, limit: number): Promise<MessageSummary[]>;
-  read(acct: AccountConfig, folder: string, uid: number, maxChars: number): Promise<FullMessage | null>;
-  setSeen(acct: AccountConfig, folder: string, uids: number[], seen: boolean): Promise<void>;
+  read(acct: AccountConfig, folder: string, uid: number, uidValidity: string, maxChars: number): Promise<FullMessage | null>;
+  setSeen(acct: AccountConfig, folder: string, uids: number[], uidValidity: string, seen: boolean): Promise<void>;
   /** SMTP submit of a pre-built RFC 822 message. */
   smtpSend(acct: AccountConfig, envelope: { from: string; to: string[] }, raw: Buffer): Promise<{ messageId?: string }>;
   /** IMAP APPEND a copy to the Sent folder. */
@@ -72,6 +73,21 @@ export function toSearchObject(q: SearchQuery): SearchObject {
   if (q.unreadOnly) s.seen = false;
   if (Object.keys(s).length === 0) s.all = true;
   return s;
+}
+
+// ImapFlow exposes UIDVALIDITY as bigint; use a decimal string on the JSON boundary.
+function mailboxUidValidity(c: ImapFlow): string {
+  const value = c.mailbox && c.mailbox.uidValidity;
+  if (!value || value < 1n || value > 4294967295n) {
+    throw new Error("Mailbox UIDVALIDITY unavailable");
+  }
+  return value.toString();
+}
+
+function requireUidValidity(c: ImapFlow, expected: string): void {
+  if (mailboxUidValidity(c) !== expected) {
+    throw new Error("Stale message reference: UIDVALIDITY changed; list or search messages again");
+  }
 }
 
 export class ImapBackend implements MailBackend {
@@ -102,6 +118,7 @@ export class ImapBackend implements MailBackend {
     return this.withClient(acct, async (c) => {
       const lock = await c.getMailboxLock(folder, { readOnly: true });
       try {
+        const uidValidity = mailboxUidValidity(c);
         const uids = (await c.search(toSearchObject(q), { uid: true })) || [];
         const pick = uids.sort((a, b) => b - a).slice(0, limit);
         if (pick.length === 0) return [];
@@ -110,6 +127,7 @@ export class ImapBackend implements MailBackend {
           const f = m.envelope?.from?.[0];
           out.push({
             uid: m.uid,
+            uidValidity,
             date: m.envelope?.date ? new Date(m.envelope.date).toISOString() : undefined,
             from: f ? (f.name ? `${f.name} <${f.address}>` : f.address) : undefined,
             subject: m.envelope?.subject,
@@ -123,10 +141,11 @@ export class ImapBackend implements MailBackend {
     });
   }
 
-  read(acct: AccountConfig, folder: string, uid: number, maxChars: number) {
+  read(acct: AccountConfig, folder: string, uid: number, uidValidity: string, maxChars: number) {
     return this.withClient(acct, async (c) => {
       const lock = await c.getMailboxLock(folder, { readOnly: true });
       try {
+        requireUidValidity(c, uidValidity);
         // BODY.PEEK: reading does not set \Seen.
         const m = await c.fetchOne(String(uid), { uid: true, source: true, flags: true }, { uid: true });
         if (!m || !m.source) return null;
@@ -135,6 +154,7 @@ export class ImapBackend implements MailBackend {
         const addr = (a: any) => (a ? (Array.isArray(a) ? a.map((x) => x.text).join(", ") : a.text) : undefined);
         return {
           uid,
+          uidValidity,
           date: p.date?.toISOString(),
           from: addr(p.from),
           to: addr(p.to),
@@ -156,10 +176,11 @@ export class ImapBackend implements MailBackend {
     });
   }
 
-  setSeen(acct: AccountConfig, folder: string, uids: number[], seen: boolean) {
+  setSeen(acct: AccountConfig, folder: string, uids: number[], uidValidity: string, seen: boolean) {
     return this.withClient(acct, async (c) => {
       const lock = await c.getMailboxLock(folder);
       try {
+        requireUidValidity(c, uidValidity);
         if (seen) await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true });
         else await c.messageFlagsRemove(uids, ["\\Seen"], { uid: true });
       } finally {

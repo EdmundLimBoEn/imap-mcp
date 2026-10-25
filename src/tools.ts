@@ -8,6 +8,9 @@ const fail = (msg: string) => ({ content: [{ type: "text" as const, text: msg }]
 const noCrlf = (s: string) => !/[\r\n]/.test(s);
 const header = z.string().refine(noCrlf, "CR/LF not allowed in headers");
 const address = z.string().email().refine(noCrlf, "CR/LF not allowed in addresses");
+const uidValidity = z.string().regex(/^[1-9][0-9]{0,9}$/)
+  .refine((value) => Number(value) <= 4294967295, "UIDVALIDITY must be a nonzero 32-bit value")
+  .describe("Mailbox UIDVALIDITY string returned by list_messages or search; required to reject stale UIDs");
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}/, "YYYY-MM-DD");
 
 export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
@@ -85,10 +88,10 @@ export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
     "read_message",
     {
       description: "Read one message: headers, plain-text body (size-capped) and attachment names. Does not mark it read.",
-      inputSchema: { account: acctSchema, folder: z.string().default("INBOX"), uid: z.number().int().positive() },
+      inputSchema: { account: acctSchema, folder: z.string().default("INBOX"), uid: z.number().int().positive(), uidValidity },
     },
-    wrap(async (a: { account: string; folder: string; uid: number }) => {
-      const m = await backend.read(get(a.account), a.folder, a.uid, cfg.maxBodyChars);
+    wrap(async (a: { account: string; folder: string; uid: number; uidValidity: string }) => {
+      const m = await backend.read(get(a.account), a.folder, a.uid, a.uidValidity, cfg.maxBodyChars);
       if (!m) throw new Error(`Message ${a.uid} not found in ${a.folder}`);
       return m;
     }),
@@ -102,11 +105,12 @@ export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
         inputSchema: {
           account: acctSchema,
           folder: z.string().default("INBOX"),
+          uidValidity,
           uids: z.array(z.number().int().positive()).min(1).max(500),
         },
       },
-      wrap(async (a: { account: string; folder: string; uids: number[] }) => {
-        await backend.setSeen(get(a.account), a.folder, a.uids, seen);
+      wrap(async (a: { account: string; folder: string; uids: number[]; uidValidity: string }) => {
+        await backend.setSeen(get(a.account), a.folder, a.uids, a.uidValidity, seen);
         return { updated: a.uids.length, seen };
       }),
     );

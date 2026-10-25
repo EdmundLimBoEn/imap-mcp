@@ -16,6 +16,8 @@ A small [MCP](https://modelcontextprotocol.io) server that bridges one or more I
 | `mark_read` / `mark_unread` | Set or clear `\Seen` on UIDs |
 | `send_message` | **Only when `SMTP_ENABLED=true`.** `account, to[], cc[]?, subject, body, in_reply_to?`. Plain text. `in_reply_to` sets both `In-Reply-To` and `References`. Addresses are validated and CR/LF in any header is rejected. After sending, a copy is APPENDed to the Sent folder (`\Sent` special-use, else `Sent`, or `IMAP_<NAME>_SENT`) |
 
+Message results include `uidValidity` as a decimal string. Pass it with the same account, folder and UID(s) to `read_message`, `mark_read`, and `mark_unread`. If the mailbox UIDVALIDITY changes, these operations reject the stale reference; list or search again before retrying.
+
 ## Configuration (env vars only)
 
 | Var | Required | Default | Notes |

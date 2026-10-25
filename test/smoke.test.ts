@@ -45,12 +45,12 @@ describe.skipIf(!host)("smoke: GreenMail", () => {
     expect(list[0].subject).toBe("Smoke hello");
     const uid = list[0].uid;
     expect((await b.search(acct, "INBOX", { subject: "Smoke" }, 10)).length).toBe(1);
-    const m = await b.read(acct, "INBOX", uid, 4);
+    const m = await b.read(acct, "INBOX", uid, list[0].uidValidity, 4);
     expect(m!.body).toBe("body");
     expect(m!.truncated).toBe(true);
     expect(m!.attachments.map((a) => a.filename)).toEqual(["note.txt"]);
     expect(m!.seen).toBe(false);
-    await b.setSeen(acct, "INBOX", [uid], true);
+    await b.setSeen(acct, "INBOX", [uid], list[0].uidValidity, true);
     expect(await b.search(acct, "INBOX", { unreadOnly: true }, 10)).toEqual([]);
     expect((await b.listFolders(acct)).map((f) => f.path)).toContain("INBOX");
   });
@@ -74,7 +74,7 @@ describe.skipIf(!host)("smoke: GreenMail", () => {
     expect(got.length).toBe(1);
     const sent = await b.search(acct, "Sent", { subject: "Smoke sent" }, 10);
     expect(sent.length).toBe(1);
-    const m = await b.read(acct, "Sent", sent[0].uid, 1000);
+    const m = await b.read(acct, "Sent", sent[0].uid, sent[0].uidValidity, 1000);
     expect(m!.body.trim()).toBe("via smtp");
   });
 });
