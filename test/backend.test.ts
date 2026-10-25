@@ -503,6 +503,36 @@ describe("bounded UID selection", () => {
     expect(imap.release).toHaveBeenCalledOnce();
   });
 
+  it("excludes unsolicited UIDs even when they have envelope data", async () => {
+    imap.search.mockResolvedValue([3, 7]);
+    imap.fetch.mockImplementation(async function* () {
+      yield { uid: 99, flags: new Set(["\\Seen"]) };
+      yield { uid: 3, envelope: { subject: "Outside the selected page" } };
+      yield { uid: 7, envelope: { subject: "Selected" } };
+    });
+    const result = await backend.search(account, "INBOX", {}, 1);
+    expect(result).toEqual([expect.objectContaining({ uid: 7, subject: "Selected" })]);
+  });
+
+  it("deduplicates complete rows and ignores flag-only updates before and after envelopes", async () => {
+    imap.search.mockResolvedValue([7, 8, 9]);
+    imap.fetch.mockImplementation(async function* () {
+      yield { uid: 7, flags: new Set() };
+      yield { uid: 9, flags: new Set(["\\Seen"]) };
+      yield { uid: 7, envelope: { subject: "Selected" }, flags: new Set(["\\Seen"]) };
+      yield { uid: 8, envelope: {} };
+      yield { uid: 7, envelope: { subject: "Selected" }, flags: new Set(["\\Seen"]) };
+      yield { uid: 7, flags: new Set() };
+    });
+    const result = await backend.search(account, "INBOX", {}, 3);
+    expect(result).toEqual([
+      expect.objectContaining({ uid: 8, uidValidity: "123" }),
+      expect.objectContaining({ uid: 7, subject: "Selected", seen: true }),
+    ]);
+    expect(imap.release).toHaveBeenCalledOnce();
+    expect(imap.logout).toHaveBeenCalledOnce();
+  });
+
   it("sorts at most a page for a large filtered result while preserving every filter", async () => {
     const limit = 5;
     const uids = Array.from({ length: 10000 }, (_, i) => ((i * 7919) % 10000) * 3 + 1);
