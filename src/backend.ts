@@ -230,10 +230,11 @@ export class ImapBackend implements MailBackend {
         const out: MessageSummary[] = [];
         for await (const m of c.fetch(pick, { uid: true, envelope: true, flags: true }, { uid: true })) {
           const f = m.envelope?.from?.[0];
+          const date = m.envelope?.date ? new Date(m.envelope.date) : undefined;
           out.push({
             uid: m.uid,
             uidValidity,
-            date: m.envelope?.date ? new Date(m.envelope.date).toISOString() : undefined,
+            date: date && Number.isFinite(date.getTime()) ? date.toISOString() : undefined,
             from: f ? (f.name ? `${f.name} <${f.address}>` : f.address) : undefined,
             subject: m.envelope?.subject,
             seen: m.flags?.has("\\Seen") ?? false,
