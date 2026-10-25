@@ -98,6 +98,30 @@ describe("tools", () => {
     expect(ctx.b.setSeen).toHaveBeenNthCalledWith(1, expect.anything(), "INBOX", [1, 2], true);
     expect(ctx.b.setSeen).toHaveBeenNthCalledWith(2, expect.anything(), "INBOX", [3], false);
   });
+  it.each(["mark_read", "mark_unread"])("%s accepts the maximum 500 UIDs", async (name) => {
+    const uids = Array.from({ length: 500 }, (_, i) => i + 1);
+    const r = await ctx.client.callTool({ name, arguments: { account: "work", folder: "INBOX", uids } });
+    expect(r.isError).not.toBe(true);
+    expect(ctx.b.setSeen).toHaveBeenCalledWith(expect.anything(), "INBOX", uids, name === "mark_read");
+  });
+  it("enforces the input element budget including nested unknown fields", async () => {
+    // Two top-level members, one nested member, and 1,021 array entries total 1,024.
+    const argumentsAtLimit = { account: "work", extra: { values: Array(1021).fill(0) } };
+    const accepted = await ctx.client.callTool({ name: "list_folders", arguments: argumentsAtLimit });
+    expect(accepted.isError).not.toBe(true);
+    expect(ctx.b.listFolders).toHaveBeenCalledTimes(1);
+    vi.mocked(ctx.b.listFolders).mockClear();
+
+    const rejected = await ctx.client.callTool({
+      name: "list_folders",
+      arguments: { account: "work", extra: { values: Array(1022).fill(0) } },
+    });
+    expect(rejected.isError).toBe(true);
+    expect(rejected.content).toEqual([
+      { type: "text", text: expect.stringContaining("arguments contain more than the maximum of 1024 elements") },
+    ]);
+    expect(ctx.b.listFolders).not.toHaveBeenCalled();
+  });
   it("unknown account is an error", async () => {
     const r: any = await ctx.client.callTool({ name: "list_folders", arguments: { account: "nope" } });
     expect(r.isError).toBe(true);
