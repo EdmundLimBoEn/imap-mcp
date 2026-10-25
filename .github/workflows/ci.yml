@@ -13,7 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     services:
       greenmail:
-        image: greenmail/standalone:2.1.2
+        # 2.1.12 fixes RFC822.SIZE to include headers (greenmail#967).
+        image: greenmail/standalone:2.1.12
         env:
           GREENMAIL_OPTS: "-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.users=smoke:smoke@example.test -Dgreenmail.users.login=email -Dgreenmail.verbose"
         ports:
