@@ -69,7 +69,25 @@ export interface MailBackend {
   appendSent(acct: AccountConfig, raw: Buffer): Promise<{ folder: string }>;
 }
 
+export function isValidSearchDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+export function validateSearchDates(q: SearchQuery): void {
+  for (const value of [q.since, q.before]) {
+    if (value !== undefined && !isValidSearchDate(value)) {
+      throw new Error("Search dates must be calendar-valid YYYY-MM-DD values");
+    }
+  }
+  if (q.since !== undefined && q.before !== undefined && q.since > q.before) {
+    throw new Error("since must be on or before before");
+  }
+}
+
 export function toSearchObject(q: SearchQuery): SearchObject {
+  validateSearchDates(q);
   const s: SearchObject = {};
   if (q.from) s.from = q.from;
   if (q.subject) s.subject = q.subject;
@@ -91,11 +109,35 @@ export class ImapBackend implements MailBackend {
       logger: false,
       tls: { rejectUnauthorized: process.env.IMAP_TLS_INSECURE !== "true" },
     });
-    await c.connect();
+    let closed = false;
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      try { c.close(); } catch { /* Cleanup must not expose protocol errors. */ }
+    };
+    const failure = new Error("IMAP operation failed");
+    const connectionError = new Promise<never>((_resolve, reject) => {
+      // Keep the listener for late socket errors, including those during close.
+      c.on("error", () => {
+        reject(failure);
+        close();
+      });
+    });
     try {
-      return await fn(c);
-    } finally {
-      await c.logout().catch(() => c.close());
+      return await Promise.race([
+        connectionError,
+        (async () => {
+          await c.connect();
+          if (closed) throw failure;
+          const result = await fn(c);
+          if (closed) throw failure;
+          await c.logout().catch(close);
+          return result;
+        })(),
+      ]);
+    } catch {
+      close();
+      throw failure;
     }
   }
 
@@ -109,7 +151,8 @@ export class ImapBackend implements MailBackend {
     return this.withClient(acct, async (c) => {
       const lock = await c.getMailboxLock(folder, { readOnly: true });
       try {
-        const uids = (await c.search(toSearchObject(q), { uid: true })) || [];
+        const uids = await c.search(toSearchObject(q), { uid: true });
+        if (!uids) throw new Error("IMAP search failed");
         const pick = uids.sort((a, b) => b - a).slice(0, limit);
         if (pick.length === 0) return [];
         const out: MessageSummary[] = [];
@@ -167,8 +210,10 @@ export class ImapBackend implements MailBackend {
     return this.withClient(acct, async (c) => {
       const lock = await c.getMailboxLock(folder);
       try {
-        if (seen) await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true });
-        else await c.messageFlagsRemove(uids, ["\\Seen"], { uid: true });
+        const success = seen
+          ? await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true })
+          : await c.messageFlagsRemove(uids, ["\\Seen"], { uid: true });
+        if (!success) throw new Error("IMAP flag update failed");
       } finally {
         lock.release();
       }

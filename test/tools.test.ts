@@ -120,6 +120,32 @@ describe("tools", () => {
     expect(ctx.b.search).toHaveBeenCalledWith(expect.anything(), "INBOX",
       { from: "a@b.c", subject: undefined, text: "invoice", since: "2026-01-01", before: "2026-02-01" }, 50);
   });
+  it.each(["since", "before"])("search rejects invalid %s dates before calling the backend", async (field) => {
+    for (const value of ["2026-99-99junk", "2026-01-01junk", "2026-01-01\n", "2026-01-01T00:00:00Z",
+      "2026-2-01", "2026-00-01", "2026-13-01", "2026-01-00", "2026-04-31", "2026-02-29", "1900-02-29", ""]) {
+      const r = await ctx.client.callTool({ name: "search", arguments: {
+        account: "work", from: "sender@example.com", [field]: value,
+      } });
+      expect(r.isError, value).toBe(true);
+    }
+    expect(ctx.b.search).not.toHaveBeenCalled();
+  });
+  it("search rejects inverted date ranges before calling the backend", async () => {
+    const r = await ctx.client.callTool({ name: "search", arguments: {
+      account: "work", since: "2026-03-01", before: "2026-02-28",
+    } });
+    expect(r.isError).toBe(true);
+    expect(ctx.b.search).not.toHaveBeenCalled();
+  });
+  it.each([
+    {}, { since: "2024-02-29" }, { before: "2000-02-29" },
+    { since: "2024-02-29", before: "2024-03-01" },
+    { since: "2026-01-01", before: "2026-01-01" },
+  ])("search preserves valid date constraints %j", async (dates) => {
+    const r = await ctx.client.callTool({ name: "search", arguments: { account: "work", ...dates } });
+    expect(r.isError).not.toBe(true);
+    expect(ctx.b.search).toHaveBeenCalledWith(expect.anything(), "INBOX", expect.objectContaining(dates), 50);
+  });
   it("read_message caps body using MAX_BODY_CHARS", async () => {
     const m = parse(await ctx.client.callTool({ name: "read_message", arguments: { account: "work", uid: 7 } }));
     expect(m.body.length).toBe(50);
