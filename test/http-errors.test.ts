@@ -14,16 +14,17 @@ async function request(body: string | Readable) {
   });
   let status: number | undefined;
   let response: unknown;
+  let destroyedAtResponse: boolean | undefined;
   const res = Object.assign(new EventEmitter(), {
     headersSent: false,
     writeHead(code: number) { status = code; return this; },
-    end(data: string) { response = JSON.parse(data); },
+    end(data: string) { response = JSON.parse(data); destroyedAtResponse = req.destroyed; },
   });
   const app = createApp(cfg(), {} as MailBackend);
   const handler = app.listeners("request")[0];
   await handler(req as unknown as IncomingMessage, res as unknown as ServerResponse);
   res.emit("close");
-  return { status, response, req };
+  return { status, response, req, destroyedAtResponse };
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -35,11 +36,12 @@ describe("HTTP error classification and redaction", () => {
     expect(result.response).toEqual({ error: "invalid JSON" });
   });
 
-  it("returns 413 for oversized UTF-8 input without destroying the request", async () => {
+  it("returns 413 for oversized UTF-8 input before cleaning up the request on response close", async () => {
     const result = await request(JSON.stringify("é".repeat(500_000)));
     expect(result.status).toBe(413);
     expect(result.response).toEqual({ error: "body too large" });
-    expect(result.req.destroyed).toBe(false);
+    expect(result.destroyedAtResponse).toBe(false);
+    expect(result.req.destroyed).toBe(true);
   });
 
   it("counts bytes across chunks", async () => {

@@ -1,3 +1,4 @@
+import { operationContext } from "../src/limits.js";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -186,6 +187,21 @@ describe("bounded message reads", () => {
     expect(vi.mocked(simpleParser).mock.calls[0][0]).toEqual(source);
   });
 
+  it("destroys a stalled download on caller cancellation without parsing it", async () => {
+    const content = new Readable({ read() {} });
+    client.download.mockResolvedValue({ content });
+    const controller = new AbortController();
+    const result = operationContext.run(controller.signal, read);
+    const rejected = expect(result).rejects.toThrow("cancelled");
+    await vi.waitFor(() => expect(client.download).toHaveBeenCalledOnce());
+    controller.abort();
+    await rejected;
+    expect(content.destroyed).toBe(true);
+    expect(client.close).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+    expect(simpleParser).not.toHaveBeenCalled();
+  });
+
   it.each([
     { advertised: 90_000, delivered: 65_536 },
     { advertised: raw.length, delivered: 0 },
@@ -257,6 +273,19 @@ describe("IMAP connection lifecycle", () => {
   beforeEach(() => {
     client = mockClient();
     createClient.mockReset().mockReturnValue(client);
+  });
+
+  it.each(["connect", "list", "logout"] as const)("cancellation closes a stalled %s and permits another operation", async (phase) => {
+    client[phase].mockImplementationOnce(() => new Promise<never>(() => {}));
+    const controller = new AbortController();
+    const result = operationContext.run(controller.signal, () => backend.listFolders(account));
+    const rejected = expect(result).rejects.toThrow("cancelled");
+    await vi.waitFor(() => expect(client[phase]).toHaveBeenCalledOnce());
+    controller.abort();
+    await rejected;
+    expect(client.close).toHaveBeenCalledOnce();
+    createClient.mockReturnValueOnce(mockClient());
+    await expect(backend.listFolders(account)).resolves.toEqual([{ path: "INBOX" }]);
   });
 
   it("returns results and logs out on success", async () => {

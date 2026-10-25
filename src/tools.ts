@@ -3,6 +3,8 @@ import { z } from "zod";
 import type { AppConfig } from "./config.js";
 import { buildRaw, isValidSearchDate, validateSearchDates, type MailBackend } from "./backend.js";
 
+import { RequestLimits, operationContext } from "./limits.js";
+
 const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] });
 const fail = (msg: string) => ({ content: [{ type: "text" as const, text: msg }], isError: true });
 const noCrlf = (s: string) => !/[\r\n]/.test(s);
@@ -13,7 +15,7 @@ const uidValidity = z.string().regex(/^[1-9][0-9]{0,9}$/)
   .describe("Mailbox UIDVALIDITY string returned by list_messages or search; required to reject stale UIDs");
 const date = z.string().refine(isValidSearchDate, "Calendar-valid YYYY-MM-DD required");
 
-export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
+export function buildServer(cfg: AppConfig, backend: MailBackend, limits = new RequestLimits(), requestSignal?: AbortSignal): McpServer {
   // Allow the largest valid input (500 UIDs plus fields), while bounding validation work.
   const server = new McpServer({ name: "imap-mcp", version: "0.2.0" }, { maxToolInputElements: 1024 });
   const acctSchema = z.string().describe("Account name from list_accounts");
@@ -24,9 +26,11 @@ export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
   };
   const wrap =
     <A,>(fn: (args: A) => Promise<unknown>) =>
-    async (args: A) => {
+    async (args: A, extra: { signal: AbortSignal }) => {
       try {
-        return ok(await fn(args));
+        const account = (args as { account?: string }).account?.toLowerCase() ?? "";
+        const signal = requestSignal ? AbortSignal.any([requestSignal, extra.signal]) : extra.signal;
+        return ok(await limits.run(account, signal, () => fn(args)));
       } catch (e) {
         return fail(`Error: ${(e as Error).message}`);
       }
@@ -135,9 +139,11 @@ export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
         },
       },
       wrap(async (a: { account: string; to: string[]; cc?: string[]; subject: string; body: string; in_reply_to?: string }) => {
+        limits.quota(true);
         const acct = get(a.account);
         if (!acct.smtp) throw new Error(`SMTP not configured for ${acct.name} (set IMAP_${acct.name.toUpperCase()}_SMTP_HOST)`);
         const raw = await buildRaw({ from: acct.user, to: a.to, cc: a.cc, subject: a.subject, body: a.body, inReplyTo: a.in_reply_to });
+        operationContext.getStore()?.throwIfAborted();
         const sent = await backend.smtpSend(acct, { from: acct.user, to: [...a.to, ...(a.cc ?? [])] }, raw);
         const status = sent.accepted.length === 0 ? "rejected"
           : sent.rejected.length > 0 ? "partial_submission" : "submitted";
@@ -147,6 +153,7 @@ export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
         let sentCopy: { saved: boolean; folder?: string; error?: string } = { saved: false };
         if (sent.accepted.length > 0) {
           try {
+            operationContext.getStore()?.throwIfAborted();
             sentCopy = { saved: true, ...(await backend.appendSent(acct, raw)) };
           } catch (e) {
             sentCopy = { saved: false, error: (e as Error).message };
