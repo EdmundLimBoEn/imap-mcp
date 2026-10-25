@@ -84,11 +84,35 @@ export class ImapBackend implements MailBackend {
       logger: false,
       tls: { rejectUnauthorized: process.env.IMAP_TLS_INSECURE !== "true" },
     });
-    await c.connect();
+    let closed = false;
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      try { c.close(); } catch { /* Cleanup must not expose protocol errors. */ }
+    };
+    const failure = new Error("IMAP operation failed");
+    const connectionError = new Promise<never>((_resolve, reject) => {
+      // Keep the listener for late socket errors, including those during close.
+      c.on("error", () => {
+        reject(failure);
+        close();
+      });
+    });
     try {
-      return await fn(c);
-    } finally {
-      await c.logout().catch(() => c.close());
+      return await Promise.race([
+        connectionError,
+        (async () => {
+          await c.connect();
+          if (closed) throw failure;
+          const result = await fn(c);
+          if (closed) throw failure;
+          await c.logout().catch(close);
+          return result;
+        })(),
+      ]);
+    } catch {
+      close();
+      throw failure;
     }
   }
 
