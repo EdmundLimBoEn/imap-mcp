@@ -102,7 +102,8 @@ export class ImapBackend implements MailBackend {
     return this.withClient(acct, async (c) => {
       const lock = await c.getMailboxLock(folder, { readOnly: true });
       try {
-        const uids = (await c.search(toSearchObject(q), { uid: true })) || [];
+        const uids = await c.search(toSearchObject(q), { uid: true });
+        if (!uids) throw new Error("IMAP search failed");
         const pick = uids.sort((a, b) => b - a).slice(0, limit);
         if (pick.length === 0) return [];
         const out: MessageSummary[] = [];
@@ -160,8 +161,10 @@ export class ImapBackend implements MailBackend {
     return this.withClient(acct, async (c) => {
       const lock = await c.getMailboxLock(folder);
       try {
-        if (seen) await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true });
-        else await c.messageFlagsRemove(uids, ["\\Seen"], { uid: true });
+        const success = seen
+          ? await c.messageFlagsAdd(uids, ["\\Seen"], { uid: true })
+          : await c.messageFlagsRemove(uids, ["\\Seen"], { uid: true });
+        if (!success) throw new Error("IMAP flag update failed");
       } finally {
         lock.release();
       }
