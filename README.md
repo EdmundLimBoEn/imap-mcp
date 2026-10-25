@@ -105,3 +105,13 @@ GREENMAIL_HOST=localhost npm test   # adds the end-to-end smoke test
 CI runs both and publishes `ghcr.io/edmundlimboen/imap-mcp:latest` (and `:<sha>`) on pushes to `main`, and `:X.Y.Z` for `vX.Y.Z` tags.
 
 SMTP results include `status` (`submitted`, `partial_submission`, or `rejected`), `accepted`, `rejected`, and `rejectionDetails` with recipient addresses and numeric SMTP rejection codes when available. `sent` is true only when all recipients were accepted for submission; this does not confirm delivery. A partial submission still saves a Sent copy. `retryable` lists only recipients with temporary (4xx) rejections; retry those later, never the accepted recipients. Permanent (5xx) or unknown rejections require review. Raw SMTP rejection text is omitted.
+
+Request resource limits are shared by all stateless HTTP requests for the configured
+bearer token: 120 requests and 10 send attempts per rolling minute, at most 24
+in-flight HTTP requests, 8 active tool operations globally, 2 per account, and 16
+queued operations. HTTP admission failures return 429 with Retry-After; queue and
+send-quota failures return MCP tool errors. Requests and operations have a 30-second
+deadline (including queue time). Disconnects and MCP cancellation remove queued
+work and close active mail connections/downloads. A cancelled SMTP submission may
+already have been accepted by the mail server; verify delivery before retrying.
+Limits are process-local; replicas each have their own budget.

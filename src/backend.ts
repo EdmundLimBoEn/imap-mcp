@@ -1,3 +1,5 @@
+import { connect as connectSocket, type Socket } from "node:net";
+import { operationContext, cancelled, OPERATION_TIMEOUT_MS } from "./limits.js";
 import { ImapFlow, type SearchObject } from "imapflow";
 import { simpleParser } from "mailparser";
 import { createTransport } from "nodemailer";
@@ -166,6 +168,8 @@ export class ImapBackend implements MailBackend {
   }
 
   private async withClient<T>(acct: AccountConfig, fn: (c: ImapFlow) => Promise<T>): Promise<T> {
+    const signal = operationContext.getStore();
+    if (signal?.aborted) throw cancelled();
     const c = new ImapFlow({
       host: acct.host,
       port: acct.port,
@@ -189,8 +193,15 @@ export class ImapBackend implements MailBackend {
         close();
       });
     });
+    let onAbort = () => {};
+    const cancellation = new Promise<never>((_resolve, reject) => {
+      onAbort = () => { close(); reject(cancelled()); };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) onAbort();
+    });
     try {
       return await Promise.race([
+        cancellation,
         connectionError,
         (async () => {
           await c.connect();
@@ -202,13 +213,16 @@ export class ImapBackend implements MailBackend {
         })(),
       ]);
     } catch (error) {
+      if (signal?.aborted) { close(); throw cancelled(); }
       if (error instanceof MailOperationError && !closed) {
-        await Promise.race([connectionError, c.logout().catch(close)]);
+        await Promise.race([cancellation, connectionError, c.logout().catch(close)]);
         if (closed) throw failure;
         throw error;
       }
       close();
       throw failure;
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
     }
   }
 
@@ -263,6 +277,10 @@ export class ImapBackend implements MailBackend {
           uid: true, maxBytes: MAX_MESSAGE_BYTES + 1, chunkSize: 64 * 1024,
         });
         if (!content) return null;
+        const signal = operationContext.getStore();
+        const stopDownload = () => content.destroy(cancelled());
+        signal?.addEventListener("abort", stopDownload, { once: true });
+        if (signal?.aborted) stopDownload();
         const chunks: Buffer[] = [];
         let bytes = 0;
         try {
@@ -273,6 +291,7 @@ export class ImapBackend implements MailBackend {
             chunks.push(buffer);
           }
         } finally {
+          signal?.removeEventListener("abort", stopDownload);
           content.destroy();
         }
         // Only complete, byte-bounded input reaches the buffering MIME parser.
@@ -321,7 +340,22 @@ export class ImapBackend implements MailBackend {
 
   async smtpSend(acct: AccountConfig, envelope: { from: string; to: string[] }, raw: Buffer) {
     if (!acct.smtp) throw new Error(`SMTP not configured for ${acct.name}`);
+    const signal = operationContext.getStore();
+    if (signal?.aborted) throw cancelled();
+    let socket: Socket | undefined;
     const t = createTransport({
+      connectionTimeout: OPERATION_TIMEOUT_MS,
+      greetingTimeout: OPERATION_TIMEOUT_MS,
+      socketTimeout: OPERATION_TIMEOUT_MS,
+      ...(signal ? { getSocket: (_options: unknown, callback: (error: Error | null, options?: { connection: Socket }) => void) => {
+        socket = connectSocket({ host: acct.smtp!.host, port: acct.smtp!.port, signal });
+        const failed = (error: Error) => callback(error);
+        socket.once("error", failed);
+        socket.once("connect", () => {
+          socket!.removeListener("error", failed);
+          callback(null, { connection: socket! });
+        });
+      } } : {}),
       host: acct.smtp.host,
       port: acct.smtp.port,
       secure: acct.smtp.tls,
@@ -350,6 +384,7 @@ export class ImapBackend implements MailBackend {
         }),
       };
     } finally {
+      socket?.destroy();
       t.close();
     }
   }

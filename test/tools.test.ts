@@ -1,3 +1,4 @@
+import { RequestLimits } from "../src/limits.js";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -17,8 +18,8 @@ const mock = (): MailBackend => ({
   appendSent: vi.fn(async () => ({ folder: "Sent" })),
 });
 
-async function connect(c = cfg(), b = mock()) {
-  const server = buildServer(c, b);
+async function connect(c = cfg(), b = mock(), limits = new RequestLimits()) {
+  const server = buildServer(c, b, limits);
   const [ct, st] = InMemoryTransport.createLinkedPair();
   await server.connect(st);
   const client = new Client({ name: "t", version: "1" });
@@ -201,4 +202,18 @@ describe("tools", () => {
     const r: any = await ctx.client.callTool({ name: "list_folders", arguments: { account: "nope" } });
     expect(r.isError).toBe(true);
   });
+});
+
+it("shares send quotas across MCP servers and accounts before SMTP submission", async () => {
+  const limits = new RequestLimits({ global: 8, perAccount: 2, queue: 16, requests: 120, sends: 1, windowMs: 60000, timeoutMs: 30000 });
+  const first = await connect(cfg({ SMTP_ENABLED: "true" }), mock(), limits);
+  const second = await connect(cfg({ SMTP_ENABLED: "true" }), mock(), limits);
+  const params = { name: "send_message", arguments: { account: "work", to: ["a@example.com"], subject: "test", body: "test" } };
+  try {
+    expect((await first.client.callTool(params)).isError).not.toBe(true);
+    const result = await second.client.callTool(params);
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([{ type: "text", text: "Error: Send quota exceeded" }]);
+    expect(second.b.smtpSend).not.toHaveBeenCalled();
+  } finally { await first.client.close(); await second.client.close(); }
 });
