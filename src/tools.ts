@@ -1,14 +1,14 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { AppConfig } from "./config.js";
-import { buildRaw, type MailBackend } from "./backend.js";
+import { buildRaw, isValidSearchDate, validateSearchDates, type MailBackend } from "./backend.js";
 
 const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] });
 const fail = (msg: string) => ({ content: [{ type: "text" as const, text: msg }], isError: true });
 const noCrlf = (s: string) => !/[\r\n]/.test(s);
 const header = z.string().refine(noCrlf, "CR/LF not allowed in headers");
 const address = z.string().email().refine(noCrlf, "CR/LF not allowed in addresses");
-const date = z.string().regex(/^\d{4}-\d{2}-\d{2}/, "YYYY-MM-DD");
+const date = z.string().refine(isValidSearchDate, "Calendar-valid YYYY-MM-DD required");
 
 export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
   const server = new McpServer({ name: "imap-mcp", version: "0.2.0" });
@@ -71,14 +71,15 @@ export function buildServer(cfg: AppConfig, backend: MailBackend): McpServer {
         limit: z.number().int().min(1).max(200).default(50),
       },
     },
-    wrap(async (a: any) =>
-      backend.search(
+    wrap(async (a: any) => {
+      validateSearchDates(a);
+      return backend.search(
         get(a.account),
         a.folder,
         { from: a.from, subject: a.subject, text: a.text, since: a.since, before: a.before },
         a.limit,
-      ),
-    ),
+      );
+    }),
   );
 
   server.registerTool(
