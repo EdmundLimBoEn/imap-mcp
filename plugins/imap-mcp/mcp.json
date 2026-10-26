@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "imap": {
+      "type": "streamable-http",
+      "url": "${IMAP_MCP_URL}",
+      "headers": { "Authorization": "Bearer ${IMAP_MCP_TOKEN}" }
+    }
+  }
+}

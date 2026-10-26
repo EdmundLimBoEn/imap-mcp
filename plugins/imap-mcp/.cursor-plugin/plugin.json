@@ -1,0 +1,12 @@
+{
+  "name": "imap-mcp",
+  "description": "Read, search, triage and (if the server enables it) send email through a self-hosted imap-mcp server.",
+  "version": "0.2.0",
+  "author": { "name": "Edmund Lim" },
+  "mcpServers": "./mcp.json",
+  "skills": "./skills/",
+  "variables": [
+    { "name": "IMAP_MCP_URL", "description": "Server endpoint, e.g. http://<host>:8787/mcp", "required": true, "secret": false },
+    { "name": "IMAP_MCP_TOKEN", "description": "The server's MCP_BEARER_TOKEN (>=16 chars)", "required": true, "secret": true }
+  ]
+}
