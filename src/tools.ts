@@ -1,9 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { AppConfig } from "./config.js";
-import { buildRaw, isValidSearchDate, validateSearchDates, type MailBackend } from "./backend.js";
+import { buildRaw, isValidSearchDate, validateSearchDates, UidValidityError, type MailBackend } from "./backend.js";
 
-import { RequestLimits, operationContext } from "./limits.js";
+import { RequestLimits, ResourceLimitError, operationContext } from "./limits.js";
 
 const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] });
 const fail = (msg: string) => ({ content: [{ type: "text" as const, text: msg }], isError: true });
@@ -32,7 +32,12 @@ export function buildServer(cfg: AppConfig, backend: MailBackend, limits = new R
         const signal = requestSignal ? AbortSignal.any([requestSignal, extra.signal]) : extra.signal;
         return ok(await limits.run(account, signal, () => fn(args)));
       } catch (e) {
-        return fail(`Error: ${(e as Error).message}`);
+        // Preserve fixed command-refusal messages without exposing protocol details.
+        // Stale-reference and quota refusals carry fixed backend-authored text the caller must act on.
+        if (e instanceof UidValidityError || e instanceof ResourceLimitError || (e instanceof Error && (e.message === "IMAP search failed" || e.message === "IMAP flag update failed"))) {
+          return fail(`Error: ${e.message}`);
+        }
+        return fail("backend_error");
       }
     };
 

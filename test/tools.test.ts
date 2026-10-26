@@ -213,6 +213,26 @@ describe("tools", () => {
     const r: any = await ctx.client.callTool({ name: "list_folders", arguments: { account: "nope" } });
     expect(r.isError).toBe(true);
   });
+  it.each([
+    ["search", "search", "IMAP search failed", { account: "work" }],
+    ["list_messages", "search", "IMAP search failed", { account: "work" }],
+    ["mark_read", "setSeen", "IMAP flag update failed", { account: "work", uids: [1], uidValidity: "123" }],
+    ["mark_unread", "setSeen", "IMAP flag update failed", { account: "work", uids: [1], uidValidity: "123" }],
+  ] as const)("%s preserves fixed refusals but redacts backend details", async (name, method, message, args) => {
+    for (const [failure, expected] of [
+      [new Error(message), `Error: ${message}`],
+      [new Error(`${message}: synthetic private detail`), "backend_error"],
+      [new Error("synthetic private detail"), "backend_error"],
+      [message, "backend_error"],
+      [null, "backend_error"],
+    ] as const) {
+      vi.mocked(ctx.b[method]).mockRejectedValueOnce(failure);
+      expect(await ctx.client.callTool({ name, arguments: args })).toEqual({
+        isError: true,
+        content: [{ type: "text", text: expected }],
+      });
+    }
+  });
 });
 
 it("shares send quotas across MCP servers and accounts before SMTP submission", async () => {

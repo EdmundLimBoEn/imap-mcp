@@ -11,7 +11,7 @@ import { parseBoolean } from "./config.js";
 export const MAX_MESSAGE_BYTES = 1024 * 1024;
 
 // Only locally generated, fixed messages may bypass protocol-error redaction.
-class MailOperationError extends Error {}
+export class MailOperationError extends Error {}
 
 export interface MessageSummary {
   uid: number;
@@ -112,7 +112,7 @@ export function toSearchObject(q: SearchQuery): SearchObject {
 }
 
 // Only locally generated validation errors may cross the protocol error boundary.
-class UidValidityError extends MailOperationError {}
+export class UidValidityError extends MailOperationError {}
 
 // ImapFlow exposes UIDVALIDITY as bigint; use a decimal string on the JSON boundary.
 function mailboxUidValidity(c: ImapFlow): string {
