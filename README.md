@@ -2,7 +2,7 @@
 
 A small [MCP](https://modelcontextprotocol.io) server that bridges one or more IMAP mailboxes over **Streamable HTTP**, so AI agents can read, search and triage mail, and optionally send it.
 
-**Read-only by default:** no tool can move or delete mail; `mark_read` / `mark_unread` only touch the `\Seen` flag. Sending is off unless you set `SMTP_ENABLED=true`; when it is off, the `send_message` tool is not registered at all.
+**Enabled by default: reading, searching and read-status changes.** No tool can move or delete mail; `mark_read` / `mark_unread` only touch the `\Seen` flag. Sending is off unless you set `SMTP_ENABLED=true`; when it is off, the `send_message` tool is not registered at all.
 
 ## Tools
 
@@ -16,6 +16,10 @@ A small [MCP](https://modelcontextprotocol.io) server that bridges one or more I
 | `mark_read` / `mark_unread` | Set or clear `\Seen` on UIDs |
 | `send_message` | **Only when `SMTP_ENABLED=true`.** `account, to[], cc[]?, subject, body, in_reply_to?`. Plain text. `in_reply_to` sets both `In-Reply-To` and `References`. Addresses are validated and CR/LF in any header is rejected. After sending, a copy is APPENDed to the Sent folder (`\Sent` special-use, else `Sent`, or `IMAP_<NAME>_SENT`) |
 
+Message results include `uidValidity` as a decimal string. Pass it with the same account, folder and UID(s) to `read_message`, `mark_read`, and `mark_unread`. If the mailbox UIDVALIDITY changes, these operations reject the stale reference; list or search again before retrying.
+
+If HTML-to-text conversion fails, `read_message` includes `bodyUnavailable: "conversion_failed"` while preserving available headers, attachment metadata, and any available text. The body may be incomplete even when `truncated` is false; `truncated` only indicates the character cap.
+
 ## Configuration (env vars only)
 
 | Var | Required | Default | Notes |
@@ -26,10 +30,10 @@ A small [MCP](https://modelcontextprotocol.io) server that bridges one or more I
 | `IMAP_<NAME>_USER` | yes | | e.g. `user@example.com` |
 | `IMAP_<NAME>_PASS` | yes | | Use an app password |
 | `IMAP_<NAME>_PORT` | no | 993 (TLS) / 143 | |
-| `IMAP_<NAME>_TLS` | no | `true` | Implicit TLS |
+| `IMAP_<NAME>_TLS` | no | `true` | Implicit TLS; `false` requires STARTTLS |
 | `IMAP_<NAME>_SMTP_HOST` | for sending | | e.g. `smtp.example.com`. Reuses `IMAP_<NAME>_USER` / `_PASS` |
 | `IMAP_<NAME>_SMTP_PORT` | no | `465` | |
-| `IMAP_<NAME>_SMTP_TLS` | no | `true` | Implicit TLS; set `false` for plain/STARTTLS ports |
+| `IMAP_<NAME>_SMTP_TLS` | no | `true` | Implicit TLS; `false` requires STARTTLS (set the SMTP port accordingly) |
 | `IMAP_<NAME>_SENT` | no | auto | Sent folder override |
 | `SMTP_ENABLED` | no | `false` | Global gate; `send_message` exists only when `true` |
 | `PORT` | no | `8787` | |
@@ -39,6 +43,15 @@ A small [MCP](https://modelcontextprotocol.io) server that bridges one or more I
 | `IMAP_TLS_INSECURE` | no | `false` | Skip TLS cert verification (testing only) |
 
 `<NAME>` is the account name upper-cased. See [`.env.example`](.env.example).
+
+`read_message` rejects messages larger than 1 MiB of raw MIME data, including attachments,
+before parsing. It checks the reported size before downloading and enforces the byte cap
+during download, independently of `MAX_BODY_CHARS`.
+
+Boolean settings accept `true/false`, `1/0`, `yes/no`, and `on/off` (case-insensitive). Unset or empty values use the default; other values are rejected.
+
+Numeric settings accept decimal digits only: ports must be 1–65535, and `MAX_BODY_CHARS`
+must be 1–1048576. Unset values use the defaults; empty or invalid values prevent startup.
 
 ## Run
 
@@ -83,13 +96,27 @@ Example client config:
 
 ## Development
 
+The GreenMail smoke tests explicitly use `new ImapBackend({ allowPlaintextForTests: true })` for their plaintext server. This option is rejected unless `NODE_ENV=test`; normal connections always require TLS.
+
 ```bash
 npm ci
 npm test                       # unit tests (mocked IMAP layer)
 docker run -d -p 3025:3025 -p 3143:3143 \
   -e GREENMAIL_OPTS="-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.users=smoke:smoke@example.test -Dgreenmail.users.login=email" \
-  greenmail/standalone:2.1.2
+  greenmail/standalone:2.1.12
 GREENMAIL_HOST=localhost npm test   # adds the end-to-end smoke test
 ```
 
 CI runs both and publishes `ghcr.io/edmundlimboen/imap-mcp:latest` (and `:<sha>`) on pushes to `main`, and `:X.Y.Z` for `vX.Y.Z` tags.
+
+SMTP results include `status` (`submitted`, `partial_submission`, or `rejected`), `accepted`, `rejected`, and `rejectionDetails` with recipient addresses and numeric SMTP rejection codes when available. `sent` is true only when all recipients were accepted for submission; this does not confirm delivery. A partial submission still saves a Sent copy. `retryable` lists only recipients with temporary (4xx) rejections; retry those later, never the accepted recipients. Permanent (5xx) or unknown rejections require review. Raw SMTP rejection text is omitted.
+
+Request resource limits are shared by all stateless HTTP requests for the configured
+bearer token: 120 requests and 10 send attempts per rolling minute, at most 24
+in-flight HTTP requests, 8 active tool operations globally, 2 per account, and 16
+queued operations. HTTP admission failures return 429 with Retry-After; queue and
+send-quota failures return MCP tool errors. Requests and operations have a 30-second
+deadline (including queue time). Disconnects and MCP cancellation remove queued
+work and close active mail connections/downloads. A cancelled SMTP submission may
+already have been accepted by the mail server; verify delivery before retrying.
+Limits are process-local; replicas each have their own budget.

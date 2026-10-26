@@ -24,7 +24,7 @@ describe.skipIf(!host)("smoke: GreenMail", () => {
     SMTP_ENABLED: "true",
   });
   const acct = cfg.accounts.get("test")!;
-  const b = new ImapBackend();
+  const b = new ImapBackend({ allowPlaintextForTests: true });
 
   it("lists, searches, reads and flags", async () => {
     // Seed INBOX via IMAP APPEND (test-only; the server itself never appends or sends).
@@ -35,8 +35,19 @@ describe.skipIf(!host)("smoke: GreenMail", () => {
       'Content-Type: multipart/mixed; boundary="b1"', "", "--b1", "Content-Type: text/plain", "", "body text here",
       "--b1", 'Content-Type: text/plain; name="note.txt"', 'Content-Disposition: attachment; filename="note.txt"', "", "hi", "--b1--", "",
     ].join("\r\n");
-    await seedClient.append("INBOX", raw, []);
-    await seedClient.logout();
+    try {
+      await seedClient.append("INBOX", raw, []);
+      await seedClient.mailboxOpen("INBOX", { readOnly: true });
+      const stored = await seedClient.fetchOne("*", { size: true, source: true });
+      // The download completeness check needs RFC822.SIZE to include headers,
+      // not just the body length returned by older GreenMail versions (#967).
+      expect(stored).toBeTruthy();
+      if (!stored) throw new Error("Seeded message missing");
+      expect(stored.source).toBeInstanceOf(Buffer);
+      expect(stored.size).toBe(stored.source!.length);
+    } finally {
+      await seedClient.logout();
+    }
     let list = [] as Awaited<ReturnType<typeof b.search>>;
     for (let i = 0; i < 20 && list.length === 0; i++) {
       list = await b.search(acct, "INBOX", { unreadOnly: true }, 10).catch(() => []);
@@ -45,12 +56,12 @@ describe.skipIf(!host)("smoke: GreenMail", () => {
     expect(list[0].subject).toBe("Smoke hello");
     const uid = list[0].uid;
     expect((await b.search(acct, "INBOX", { subject: "Smoke" }, 10)).length).toBe(1);
-    const m = await b.read(acct, "INBOX", uid, 4);
+    const m = await b.read(acct, "INBOX", uid, list[0].uidValidity, 4);
     expect(m!.body).toBe("body");
     expect(m!.truncated).toBe(true);
     expect(m!.attachments.map((a) => a.filename)).toEqual(["note.txt"]);
     expect(m!.seen).toBe(false);
-    await b.setSeen(acct, "INBOX", [uid], true);
+    await b.setSeen(acct, "INBOX", [uid], list[0].uidValidity, true);
     expect(await b.search(acct, "INBOX", { unreadOnly: true }, 10)).toEqual([]);
     expect((await b.listFolders(acct)).map((f) => f.path)).toContain("INBOX");
   });
@@ -74,7 +85,7 @@ describe.skipIf(!host)("smoke: GreenMail", () => {
     expect(got.length).toBe(1);
     const sent = await b.search(acct, "Sent", { subject: "Smoke sent" }, 10);
     expect(sent.length).toBe(1);
-    const m = await b.read(acct, "Sent", sent[0].uid, 1000);
+    const m = await b.read(acct, "Sent", sent[0].uid, sent[0].uidValidity, 1000);
     expect(m!.body.trim()).toBe("via smtp");
   });
 });
