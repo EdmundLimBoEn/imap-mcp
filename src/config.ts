@@ -5,6 +5,7 @@ export interface AccountConfig {
   user: string;
   pass: string;
   tls: boolean;
+  from?: string;
   sentFolder?: string;
   smtp?: { host: string; port: number; tls: boolean };
 }
@@ -34,6 +35,15 @@ function parseInteger(value: string | undefined, fallback: number, name: string,
   return parsed;
 }
 
+function parseEmail(value: string | undefined, name: string): string | undefined {
+  if (value === undefined || value === "") return undefined;
+  // Local-part @ domain with a dot, no whitespace or CR/LF. Do not echo the value.
+  if (/[\s\r\n]/.test(value) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+    throw new Error(`Invalid email setting: ${name}`);
+  }
+  return value;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   parseBoolean(env.IMAP_TLS_INSECURE, false, "IMAP_TLS_INSECURE");
   const bearerToken = env.MCP_BEARER_TOKEN ?? "";
@@ -53,6 +63,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       return v;
     };
     const tls = parseBoolean(env[p + "TLS"], true, p + "TLS");
+    const from = parseEmail(env[p + "FROM"], p + "FROM");
     const acct: AccountConfig = {
       name,
       host: need("HOST"),
@@ -60,6 +71,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       user: need("USER"),
       pass: need("PASS"),
       tls,
+      ...(from ? { from } : {}),
       sentFolder: env[p + "SENT"] || undefined,
     };
     const smtpHost = env[p + "SMTP_HOST"];

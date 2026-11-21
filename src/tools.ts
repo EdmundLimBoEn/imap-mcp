@@ -44,7 +44,11 @@ export function buildServer(cfg: AppConfig, backend: MailBackend, limits = new R
   server.registerTool(
     "list_accounts",
     { description: "List configured mailbox accounts (names and addresses only).", inputSchema: {} },
-    wrap(async () => [...cfg.accounts.values()].map((a) => ({ name: a.name, address: a.user }))),
+    wrap(async () => [...cfg.accounts.values()].map((a) => ({
+      name: a.name,
+      address: a.user,
+      ...(a.from ? { from: a.from } : {}),
+    }))),
   );
 
   server.registerTool(
@@ -147,9 +151,10 @@ export function buildServer(cfg: AppConfig, backend: MailBackend, limits = new R
         limits.quota(true);
         const acct = get(a.account);
         if (!acct.smtp) throw new Error(`SMTP not configured for ${acct.name} (set IMAP_${acct.name.toUpperCase()}_SMTP_HOST)`);
-        const raw = await buildRaw({ from: acct.user, to: a.to, cc: a.cc, subject: a.subject, body: a.body, inReplyTo: a.in_reply_to });
+        const from = acct.from ?? acct.user;
+        const raw = await buildRaw({ from, to: a.to, cc: a.cc, subject: a.subject, body: a.body, inReplyTo: a.in_reply_to });
         operationContext.getStore()?.throwIfAborted();
-        const sent = await backend.smtpSend(acct, { from: acct.user, to: [...a.to, ...(a.cc ?? [])] }, raw);
+        const sent = await backend.smtpSend(acct, { from, to: [...a.to, ...(a.cc ?? [])] }, raw);
         const status = sent.accepted.length === 0 ? "rejected"
           : sent.rejected.length > 0 ? "partial_submission" : "submitted";
         const retryable = sent.rejectionDetails

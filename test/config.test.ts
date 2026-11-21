@@ -75,4 +75,20 @@ describe("loadConfig", () => {
     delete env.IMAP_WORK_PASS;
     expect(() => loadConfig(env)).toThrow(/IMAP_WORK_PASS/);
   });
+
+  it("parses an optional IMAP_<ACCT>_FROM override and treats empty as unset", () => {
+    expect(cfg().accounts.get("work")!.from).toBeUndefined();
+    expect(cfg({ IMAP_WORK_FROM: "" }).accounts.get("work")!.from).toBeUndefined();
+    expect(cfg({ IMAP_WORK_FROM: "edmund@k0edl.com" }).accounts.get("work")).toMatchObject({
+      user: "work@example.com",
+      from: "edmund@k0edl.com",
+    });
+  });
+  it("rejects invalid IMAP_<ACCT>_FROM values without echoing them", () => {
+    for (const value of ["not-an-address", "no-at-or-dot", "edmund@", "@k0edl.com", "edmund@k0edl",
+      "edmund@k0edl.com\n", "edmund@k0edl.com\r\nBcc: evil@example.com", " edmund@k0edl.com",
+      "edmund@k0edl.com ", "edmund k0edl@example.com"]) {
+      expect(() => cfg({ IMAP_WORK_FROM: value })).toThrow(new Error("Invalid email setting: IMAP_WORK_FROM"));
+    }
+  });
 });

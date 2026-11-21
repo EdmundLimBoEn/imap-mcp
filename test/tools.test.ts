@@ -123,6 +123,25 @@ describe("tools", () => {
     expect(parse(r)).toEqual([{ name: "work", address: "work@example.com" }, { name: "personal", address: "me@example.org" }]);
     expect(text).not.toMatch(/placeholder|imap\.example/);
   });
+  it("list_accounts includes the from override when set", async () => {
+    const { client } = await connect(cfg({ IMAP_WORK_FROM: "edmund@k0edl.com" }));
+    const r = await client.callTool({ name: "list_accounts", arguments: {} });
+    expect(parse(r)).toEqual([
+      { name: "work", address: "work@example.com", from: "edmund@k0edl.com" },
+      { name: "personal", address: "me@example.org" },
+    ]);
+    expect((r as any).content[0].text).not.toMatch(/placeholder|imap\.example/);
+  });
+  it("send_message uses the FROM override for the envelope sender and From header", async () => {
+    const { client, b } = await connect(cfg({ SMTP_ENABLED: "true", IMAP_WORK_FROM: "edmund@k0edl.com" }));
+    const r = parse(await client.callTool({ name: "send_message", arguments: {
+      account: "work", to: ["a@example.com"], subject: "s", body: "b" } }));
+    expect(r).toMatchObject({ status: "submitted", sent: true });
+    const [, env, raw] = (b.smtpSend as any).mock.calls[0];
+    expect(env).toEqual({ from: "edmund@k0edl.com", to: ["a@example.com"] });
+    expect(raw.toString()).toMatch(/^From: edmund@k0edl.com$/m);
+    expect(raw.toString()).not.toMatch(/^From: work@example.com$/m);
+  });
   it("list_messages passes folder/limit/unread", async () => {
     await ctx.client.callTool({ name: "list_messages", arguments: { account: "work", limit: 5, unread_only: true } });
     expect(ctx.b.search).toHaveBeenCalledWith(expect.objectContaining({ name: "work" }), "INBOX", { unreadOnly: true }, 5);
