@@ -27,8 +27,9 @@ If HTML-to-text conversion fails, `read_message` includes `bodyUnavailable: "con
 | `MCP_BEARER_TOKEN` | yes | | ≥16 chars. The server refuses to start without it |
 | `IMAP_ACCOUNTS` | yes | | Comma-separated names, e.g. `work,personal` |
 | `IMAP_<NAME>_HOST` | yes | | e.g. `imap.example.com` |
-| `IMAP_<NAME>_USER` | yes | | e.g. `user@example.com` |
+| `IMAP_<NAME>_USER` | yes | | e.g. `user@example.com`. SMTP and IMAP auth always use this, even when `FROM` is set |
 | `IMAP_<NAME>_PASS` | yes | | Use an app password |
+| `IMAP_<NAME>_FROM` | no | | Optional From address for `send_message` (header and SMTP envelope). Must be a valid email. Auth still uses `USER`/`PASS` |
 | `IMAP_<NAME>_PORT` | no | 993 (TLS) / 143 | |
 | `IMAP_<NAME>_TLS` | no | `true` | Implicit TLS; `false` requires STARTTLS |
 | `IMAP_<NAME>_SMTP_HOST` | for sending | | e.g. `smtp.example.com`. Reuses `IMAP_<NAME>_USER` / `_PASS` |
@@ -43,6 +44,26 @@ If HTML-to-text conversion fails, `read_message` includes `bodyUnavailable: "con
 | `IMAP_TLS_INSECURE` | no | `false` | Skip TLS cert verification (testing only) |
 
 `<NAME>` is the account name upper-cased. See [`.env.example`](.env.example).
+
+### iCloud+ custom domain
+
+iCloud IMAP/SMTP login stays the primary iCloud address plus an [app-specific password](https://support.apple.com/en-us/102654). To send as a custom domain such as `edmund@k0edl.com`, set `IMAP_<NAME>_FROM` to that address. Leave `SMTP_ENABLED=false` unless you intentionally want `send_message` registered.
+
+```bash
+IMAP_ACCOUNTS=icloud
+IMAP_ICLOUD_HOST=imap.mail.me.com
+IMAP_ICLOUD_PORT=993
+IMAP_ICLOUD_TLS=true
+IMAP_ICLOUD_USER=your-primary-address@icloud.com
+IMAP_ICLOUD_PASS=app-specific-password
+IMAP_ICLOUD_SMTP_HOST=smtp.mail.me.com
+IMAP_ICLOUD_SMTP_PORT=587
+IMAP_ICLOUD_SMTP_TLS=false
+IMAP_ICLOUD_SENT=Sent Messages
+IMAP_ICLOUD_FROM=edmund@k0edl.com
+SMTP_ENABLED=false
+```
+
 
 `read_message` rejects messages larger than 1 MiB of raw MIME data, including attachments,
 before parsing. It checks the reported size before downloading and enforces the byte cap
