@@ -51,6 +51,43 @@ describe("tools", () => {
     const { client } = await connect(cfg({ SMTP_ENABLED: "true" }));
     expect((await client.listTools()).tools.map((t) => t.name)).toContain("send_message");
   });
+  it("read-only mode hides mark and send tools even when SMTP is enabled", async () => {
+    const { client, b } = await connect(cfg({ IMAP_READ_ONLY: "true", SMTP_ENABLED: "true" }));
+    const names = (await client.listTools()).tools.map((t) => t.name).sort();
+    expect(names).toEqual(["list_accounts", "list_folders", "list_messages", "read_message", "search"]);
+    for (const name of ["mark_read", "mark_unread", "send_message"]) {
+      const r: any = await client.callTool({ name, arguments: {
+        account: "work", uid: 7, uidValidity: "123", uids: [7],
+        to: ["a@example.com"], subject: "s", body: "b",
+      } });
+      expect(r.isError).toBe(true);
+    }
+    expect(b.setSeen).not.toHaveBeenCalled();
+    expect(b.smtpSend).not.toHaveBeenCalled();
+    expect(b.appendSent).not.toHaveBeenCalled();
+  });
+  it("read-only mode still lists, searches and reads", async () => {
+    const { client, b } = await connect(cfg({ IMAP_READ_ONLY: "true", MAX_BODY_CHARS: "50" }));
+    expect(parse(await client.callTool({ name: "list_accounts", arguments: {} }))).toEqual([
+      { name: "work", address: "work@example.com" },
+      { name: "personal", address: "me@example.org" },
+    ]);
+    await client.callTool({ name: "list_folders", arguments: { account: "work" } });
+    await client.callTool({ name: "list_messages", arguments: { account: "work" } });
+    await client.callTool({ name: "search", arguments: { account: "work", subject: "hi" } });
+    const m = parse(await client.callTool({ name: "read_message", arguments: { account: "work", uidValidity: "123", uid: 7 } }));
+    expect(m.body.length).toBe(50);
+    expect(b.listFolders).toHaveBeenCalledOnce();
+    expect(b.search).toHaveBeenCalledTimes(2);
+    expect(b.read).toHaveBeenCalledOnce();
+    expect(b.setSeen).not.toHaveBeenCalled();
+  });
+  it("README documents the IMAP_READ_ONLY gate", async () => {
+    const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+    const intro = readme.split("## Tools")[0];
+    expect(intro).toMatch(/Set `IMAP_READ_ONLY=true` to also hide `mark_read`, `mark_unread`, and `send_message`/);
+    expect(readme).toMatch(/\| `IMAP_READ_ONLY` \| no \| `false` \|/);
+  });
   it("send_message sends then appends the same raw message to Sent, with threading headers", async () => {
     const { client, b } = await connect(cfg({ SMTP_ENABLED: "true" }));
     const r = parse(await client.callTool({ name: "send_message", arguments: {

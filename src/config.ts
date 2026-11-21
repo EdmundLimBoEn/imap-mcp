@@ -16,6 +16,7 @@ export interface AppConfig {
   host: string;
   maxBodyChars: number;
   smtpEnabled: boolean;
+  readOnly: boolean;
   accounts: Map<string, AccountConfig>;
 }
 
@@ -87,6 +88,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     host: env.HOST || "0.0.0.0",
     maxBodyChars: parseInteger(env.MAX_BODY_CHARS, 20000, "MAX_BODY_CHARS", 1_048_576),
     smtpEnabled: parseBoolean(env.SMTP_ENABLED, false, "SMTP_ENABLED"),
+    readOnly: parseBoolean(env.IMAP_READ_ONLY, false, "IMAP_READ_ONLY"),
     accounts,
   };
 }

@@ -112,28 +112,31 @@ export function buildServer(cfg: AppConfig, backend: MailBackend, limits = new R
     }),
   );
 
-  for (const [name, seen] of [["mark_read", true], ["mark_unread", false]] as const) {
-    server.registerTool(
-      name,
-      {
-        description: `Mark messages as ${seen ? "read" : "unread"}.`,
-        inputSchema: {
-          account: acctSchema,
-          folder: z.string().default("INBOX"),
-          uidValidity,
-          uids: z.array(z.number().int().positive()).min(1).max(500),
+  // Read-status changes and sending are hidden when IMAP_READ_ONLY=true.
+  if (!cfg.readOnly) {
+    for (const [name, seen] of [["mark_read", true], ["mark_unread", false]] as const) {
+      server.registerTool(
+        name,
+        {
+          description: `Mark messages as ${seen ? "read" : "unread"}.`,
+          inputSchema: {
+            account: acctSchema,
+            folder: z.string().default("INBOX"),
+            uidValidity,
+            uids: z.array(z.number().int().positive()).min(1).max(500),
+          },
         },
-      },
-      wrap(async (a: { account: string; folder: string; uids: number[]; uidValidity: string }) => {
-        await backend.setSeen(get(a.account), a.folder, a.uids, a.uidValidity, seen);
-        // IMAP acknowledges the command but does not verify a changed-message count.
-        return { requested: a.uids.length, seen };
-      }),
-    );
+        wrap(async (a: { account: string; folder: string; uids: number[]; uidValidity: string }) => {
+          await backend.setSeen(get(a.account), a.folder, a.uids, a.uidValidity, seen);
+          // IMAP acknowledges the command but does not verify a changed-message count.
+          return { requested: a.uids.length, seen };
+        }),
+      );
+    }
   }
 
-  // Sending only exists when SMTP_ENABLED=true.
-  if (cfg.smtpEnabled) {
+  // Sending only exists when SMTP_ENABLED=true and the server is not read-only.
+  if (cfg.smtpEnabled && !cfg.readOnly) {
     server.registerTool(
       "send_message",
       {

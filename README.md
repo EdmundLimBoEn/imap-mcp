@@ -2,7 +2,7 @@
 
 A small [MCP](https://modelcontextprotocol.io) server that bridges one or more IMAP mailboxes over **Streamable HTTP**, so AI agents can read, search and triage mail, and optionally send it.
 
-**Enabled by default: reading, searching and read-status changes.** No tool can move or delete mail; `mark_read` / `mark_unread` only touch the `\Seen` flag. Sending is off unless you set `SMTP_ENABLED=true`; when it is off, the `send_message` tool is not registered at all.
+**Enabled by default: reading, searching and read-status changes.** No tool can move or delete mail; `mark_read` / `mark_unread` only touch the `\Seen` flag. Sending is off unless you set `SMTP_ENABLED=true`; when it is off, the `send_message` tool is not registered at all. Set `IMAP_READ_ONLY=true` to also hide `mark_read`, `mark_unread`, and `send_message` (even if sending is enabled), leaving only list, search, and read tools. Search and read already open folders with IMAP `EXAMINE` (imapflow `readOnly`), so those tools do not take a write lock.
 
 ## Tools
 
@@ -13,8 +13,8 @@ A small [MCP](https://modelcontextprotocol.io) server that bridges one or more I
 | `list_messages` | Newest messages in a folder (`folder`, `limit`, `unread_only`) |
 | `search` | `from`, `subject`, `text`, `since`, `before` (YYYY-MM-DD) |
 | `read_message` | Headers, plain-text body (capped at `MAX_BODY_CHARS`), attachment names. Does not mark the message read |
-| `mark_read` / `mark_unread` | Set or clear `\Seen` on UIDs |
-| `send_message` | **Only when `SMTP_ENABLED=true`.** `account, to[], cc[]?, subject, body, in_reply_to?`. Plain text. `in_reply_to` sets both `In-Reply-To` and `References`. Addresses are validated and CR/LF in any header is rejected. After sending, a copy is APPENDed to the Sent folder (`\Sent` special-use, else `Sent`, or `IMAP_<NAME>_SENT`) |
+| `mark_read` / `mark_unread` | Set or clear `\Seen` on UIDs. Hidden when `IMAP_READ_ONLY=true` |
+| `send_message` | **Only when `SMTP_ENABLED=true` and `IMAP_READ_ONLY` is not `true`.** `account, to[], cc[]?, subject, body, in_reply_to?`. Plain text. `in_reply_to` sets both `In-Reply-To` and `References`. Addresses are validated and CR/LF in any header is rejected. After sending, a copy is APPENDed to the Sent folder (`\Sent` special-use, else `Sent`, or `IMAP_<NAME>_SENT`) |
 
 Message results include `uidValidity` as a decimal string. Pass it with the same account, folder and UID(s) to `read_message`, `mark_read`, and `mark_unread`. If the mailbox UIDVALIDITY changes, these operations reject the stale reference; list or search again before retrying.
 
@@ -37,6 +37,7 @@ If HTML-to-text conversion fails, `read_message` includes `bodyUnavailable: "con
 | `IMAP_<NAME>_SMTP_TLS` | no | `true` | Implicit TLS; `false` requires STARTTLS (set the SMTP port accordingly) |
 | `IMAP_<NAME>_SENT` | no | auto | Sent folder override |
 | `SMTP_ENABLED` | no | `false` | Global gate; `send_message` exists only when `true` |
+| `IMAP_READ_ONLY` | no | `false` | When `true`, do not register `mark_read`, `mark_unread`, or `send_message` (overrides `SMTP_ENABLED`) |
 | `PORT` | no | `8787` | |
 | `HOST` | no | `0.0.0.0` | Listen address inside the container |
 | `MAX_BODY_CHARS` | no | `20000` | Body cap for `read_message` |
@@ -47,7 +48,7 @@ If HTML-to-text conversion fails, `read_message` includes `bodyUnavailable: "con
 
 ### iCloud+ custom domain
 
-iCloud IMAP/SMTP login stays the primary iCloud address plus an [app-specific password](https://support.apple.com/en-us/102654). To send as a custom domain such as `edmund@k0edl.com`, set `IMAP_<NAME>_FROM` to that address. Leave `SMTP_ENABLED=false` unless you intentionally want `send_message` registered.
+iCloud IMAP/SMTP login stays the primary iCloud address plus an [app-specific password](https://support.apple.com/en-us/102654). To send as a custom domain such as `edmund@k0edl.com`, set `IMAP_<NAME>_FROM` to that address. Leave `SMTP_ENABLED=false` unless you intentionally want `send_message` registered. For a hosted inbox checker, also set `IMAP_READ_ONLY=true` so read-status changes stay off.
 
 ```bash
 IMAP_ACCOUNTS=icloud
@@ -62,6 +63,7 @@ IMAP_ICLOUD_SMTP_TLS=false
 IMAP_ICLOUD_SENT=Sent Messages
 IMAP_ICLOUD_FROM=edmund@k0edl.com
 SMTP_ENABLED=false
+IMAP_READ_ONLY=true
 ```
 
 
